@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMT GMP 품질관리 시스템</title>
+<style>
+  :root{
+    --green:#15a36a; --green-d:#0f7f52; --green-l:#e8f6ef;
+    --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#f6f8f7; --card:#ffffff;
+    --red:#dc2626; --amber:#d97706;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Malgun Gothic","맑은 고딕",sans-serif;color:var(--ink);background:var(--bg);font-size:14px}
+  button{font-family:inherit;cursor:pointer}
+  .hidden{display:none!important}
+
+  /* 로그인 */
+  #loginView{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .login-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:34px 30px;width:100%;max-width:380px;box-shadow:0 8px 30px rgba(0,0,0,.06)}
+  .login-card h1{font-size:18px;margin:0 0 4px;color:var(--green-d)}
+  .login-card .sub{color:var(--muted);font-size:12px;margin-bottom:22px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px}
+  .field input:focus{outline:2px solid var(--green-l);border-color:var(--green)}
+  .btn{background:var(--green);color:#fff;border:none;padding:11px 16px;border-radius:9px;font-size:14px;font-weight:600}
+  .btn:hover{background:var(--green-d)}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .btn-full{width:100%}
+  .btn-ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .btn-ghost:hover{background:#f3f4f6}
+  .btn-danger{background:var(--red)}
+  .btn-danger:hover{background:#b91c1c}
+  .btn-sm{padding:6px 11px;font-size:12px;border-radius:7px}
+  .err{color:var(--red);font-size:12px;margin-top:10px;min-height:16px}
+
+  /* 메인 레이아웃 */
+  #mainView{display:flex;min-height:100vh}
+  .side{width:230px;background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
+  .brand{padding:18px 18px 14px;border-bottom:1px solid var(--line)}
+  .brand .logo{width:34px;height:34px;border-radius:9px;background:var(--green);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;vertical-align:middle}
+  .brand .name{font-weight:700;margin-left:9px;vertical-align:middle}
+  .brand .name small{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-left:0}
+  .menu{padding:10px 8px;flex:1;overflow-y:auto}
+  .menu-link{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:9px;color:var(--ink);text-decoration:none;font-size:13px;margin-bottom:2px;border:none;background:none;width:100%;text-align:left}
+  .menu-link:hover{background:#f3f4f6}
+  .menu-link.active{background:var(--green-l);color:var(--green-d);font-weight:600}
+  .menu-link .dot{width:7px;height:7px;border-radius:50%;background:#cbd5e1}
+  .menu-link.active .dot{background:var(--green)}
+  .side-foot{padding:14px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+  .side-foot .u{color:var(--ink);font-weight:600}
+  .badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:20px;background:var(--green-l);color:var(--green-d);font-weight:600;margin-left:6px}
+  .badge.gray{background:#eef2f4;color:var(--muted)}
+
+  .content{flex:1;min-width:0}
+  .topbar{height:56px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 22px}
+  .topbar h2{font-size:16px;margin:0}
+  .topbar .right{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px}
+  .page{padding:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px}
+  .card .card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .card .card-h .t{font-weight:700;font-size:14px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600}
+  .pill.green{background:var(--green-l);color:var(--green-d)}
+  .pill.amber{background:#fef3c7;color:var(--amber)}
+  .empty{color:var(--muted);text-align:center;padding:30px 10px}
+  .actions-cell{display:flex;gap:6px;justify-content:flex-end}
+
+  /* 모달 */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal{background:#fff;border-radius:14px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:22px}
+  .modal h3{margin:0 0 16px;font-size:16px}
+  .modal .field input,.modal .field select{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;font-size:14px}
+  .modal .row2{display:flex;gap:12px}
+  .modal .row2 .field{flex:1}
+  .modal-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .chk{display:flex;align-items:center;gap:8px}
+  .chk input{width:auto}
+
+  /* 토스트 */
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;z-index:80;pointer-events:none}
+  #toast.show{opacity:1}
+
+  @media(max-width:760px){
+    .side{position:fixed;z-index:40;height:100%;transform:translateX(-100%);transition:transform .2s;box-shadow:4px 0 20px rgba(0,0,0,.1)}
+    .side.open{transform:translateX(0)}
+    .menu-toggle{display:inline-flex!important}
+  }
+  .menu-toggle{display:none;background:none;border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin-right:10px}
+</style>
+</head>
+<body>
+
+<!-- ================= 로그인 화면 ================= -->
+<div id="loginView">
+  <div class="login-card">
+    <h1>AMT GMP 품질관리 시스템</h1>
+    <div class="sub">이메일과 코드로 로그인하세요.</div>
+    <div class="field">
+      <label>이메일</label>
+      <input id="loginEmail" type="email" autocomplete="username" placeholder="name@gmail.com">
+    </div>
+    <div class="field">
+      <label>코드</label>
+      <input id="loginCode" type="password" autocomplete="current-password" placeholder="코드 입력">
+    </div>
+    <button id="loginBtn" class="btn btn-full">로그인</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+</div>
+
+<!-- ================= 메인 화면 ================= -->
+<div id="mainView" class="hidden">
+  <aside class="side" id="side">
+    <div class="brand">
+      <span class="logo">GMP</span>
+      <span class="name">AMT GMP<small>품질관리 시스템</small></span>
+    </div>
+    <nav class="menu" id="menu"></nav>
+    <div class="side-foot">
+      <div class="u" id="sideUser">-</div>
+      <div id="sideRole" style="margin:2px 0 10px"></div>
+      <button id="logoutBtn" class="btn btn-ghost btn-sm btn-full">로그아웃</button>
+    </div>
+  </aside>
+  <div class="content">
+    <div class="topbar">
+      <div style="display:flex;align-items:center">
+        <button class="menu-toggle" id="menuToggle">☰</button>
+        <h2 id="pageTitle">대시보드</h2>
+      </div>
+      <div class="right"><span class="pill green">GMP 전자기록</span><span id="topUser"></span></div>
+    </div>
+    <div class="page" id="page"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { getDatabase, ref, get, set, update, push, onValue, off }
+  from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+/* ── Firebase 설정 (amt-gmp / amtkorea 계정). API키 노출은 보안규칙으로 보호되므로 정상 ── */
+const firebaseConfig = {
+  apiKey: "AIzaSyBy3A5kZU-XdzBUIpdLNTrFJnrlWcYEtt8",
+  authDomain: "amt-gmp.firebaseapp.com",
+  databaseURL: "https://amt-gmp-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "amt-gmp",
+  storageBucket: "amt-gmp.firebasestorage.app",
+  messagingSenderId: "561161839771",
+  appId: "1:561161839771:web:dfb913975e882d12ba523e"
+};
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getDatabase(app);
+
+const SUPER_EMAIL = "kyunghoyou@gmail.com";
+
+/* ── 공통 헬퍼 ── */
+function escHtml(s){
+  if(s==null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function emailKey(email){ return String(email||'').trim().toLowerCase().replace(/\./g,','); }
+function $(id){ return document.getElementById(id); }
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('show'),2200);
+}
+
+let currentUser = null;          // {email, name, role}
+let loggingIn   = false;
+let productsUnsub = null;
+let usersUnsub = null;
+
+/* ── 감사기록 ── */
+async function logAudit(action, detail){
+  try{
+    await push(ref(db,'gmp_audit'),{
+      ts: Date.now(),
+      user: currentUser ? (currentUser.name+' <'+currentUser.email+'>') : 'unknown',
+      action, detail: detail||''
+    });
+  }catch(_){}
+}
+
+/* ── 로그인 ── */
+async function ensureAuth(email){
+  const pw = 'gmp!' + email;           // 더미 비밀번호(실제 검증은 DB 코드). 결정적이라 같은 계정 동일.
+  try{
+    await signInWithEmailAndPassword(auth, email, pw);
+  }catch(e){
+    await createUserWithEmailAndPassword(auth, email, pw); // 최초 로그인 → 계정 생성
+  }
+}
+
+async function doLogin(){
+  const email = ($('loginEmail').value||'').trim().toLowerCase();
+  const code  = ($('loginCode').value||'').trim();
+  const errEl = $('loginErr');
+  errEl.textContent='';
+  if(!email || !code){ errEl.textContent='이메일과 코드를 모두 입력하세요.'; return; }
+
+  const btn=$('loginBtn'); btn.disabled=true; btn.textContent='확인 중...';
+  loggingIn=true;
+  try{
+    await ensureAuth(email);
+    const key = emailKey(email);
+    const snap = await get(ref(db,'gmp_admins/'+key));
+    let rec = snap.val();
+
+    if(!rec){
+      if(email === SUPER_EMAIL){
+        // 최초 총괄 부트스트랩
+        rec = { email, name:'유경호', code, role:'super', createdAt: Date.now() };
+        await set(ref(db,'gmp_admins/'+key), rec);
+      }else{
+        await signOut(auth);
+        throw new Error('등록되지 않은 사용자입니다. 총괄관리자에게 등록을 요청하세요.');
+      }
+    }
+    if(String(rec.code) !== String(code)){
+      await signOut(auth);
+      throw new Error('코드가 일치하지 않습니다.');
+    }
+
+    currentUser = { email, name: rec.name||email, role: rec.role||'viewer' };
+    await cleanupPlaceholder();
+    logAudit('로그인','사용자 '+currentUser.name+' 로그인');
+    renderMain();
+  }catch(e){
+    errEl.textContent = e.message || '로그인에 실패했습니다.';
+  }finally{
+    loggingIn=false; btn.disabled=false; btn.textContent='로그인';
+  }
+}
+
+// 초기데이터에 넣어둔 임시 placeholder 자동 정리(총괄만)
+async function cleanupPlaceholder(){
+  if(currentUser && currentUser.role==='super'){
+    try{ await set(ref(db,'viewer_emails/placeholder@example,com'), null); }catch(_){}
+  }
+}
+
+async function doLogout(){
+  logAudit('로그아웃','사용자 '+(currentUser?currentUser.name:'')+' 로그아웃');
+  if(productsUnsub){ productsUnsub(); productsUnsub=null; }
+  if(usersUnsub){ usersUnsub(); usersUnsub=null; }
+  currentUser=null;
+  await signOut(auth);
+  showLogin();
+}
+
+/* ── 화면 전환 ── */
+function showLogin(){
+  $('mainView').classList.add('hidden');
+  $('loginView').classList.remove('hidden');
+  $('loginCode').value='';
+}
+
+const MENUS = [
+  {id:'dash',   label:'대시보드',        ready:false},
+  {id:'prod',   label:'제품관리',        ready:true},
+  {id:'lot',    label:'LOT 관리',        ready:false},
+  {id:'ledger', label:'입출고관리대장',  ready:false},
+  {id:'insIn',  label:'입고검사성적서',  ready:false},
+  {id:'insOut', label:'출고검사성적서',  ready:false},
+  {id:'files',  label:'첨부파일관리',    ready:false},
+  {id:'trace',  label:'LOT 추적조회',    ready:false},
+  {id:'audit',  label:'Audit Trail',     ready:false},
+  {id:'settings',label:'설정(사용자관리)',ready:true, superOnly:true}
+];
+
+function renderMain(){
+  $('loginView').classList.add('hidden');
+  $('mainView').classList.remove('hidden');
+
+  const roleLabel = {super:'총괄관리자', admin:'관리자', viewer:'조회자'}[currentUser.role]||currentUser.role;
+  $('sideUser').textContent = currentUser.name;
+  $('sideRole').innerHTML = '<span class="badge '+(currentUser.role==='viewer'?'gray':'')+'">'+escHtml(roleLabel)+'</span>';
+  $('topUser').textContent = currentUser.name+' ('+roleLabel+')';
+
+  // 메뉴
+  const menu=$('menu'); menu.innerHTML='';
+  MENUS.forEach(m=>{
+    if(m.superOnly && currentUser.role!=='super') return;
+    const a=document.createElement('button');
+    a.className='menu-link'; a.dataset.id=m.id;
+    a.innerHTML='<span class="dot"></span><span>'+escHtml(m.label)+'</span>'+(m.ready?'':'<span class="badge gray" style="margin-left:auto">준비중</span>');
+    a.addEventListener('click',()=>{ navTo(m.id); if(window.innerWidth<=760) $('side').classList.remove('open'); });
+    menu.appendChild(a);
+  });
+
+  navTo('prod'); // 1단계 기본 화면
+}
+
+function navTo(id){
+  document.querySelectorAll('.menu-link').forEach(el=>el.classList.toggle('active', el.dataset.id===id));
+  const m = MENUS.find(x=>x.id===id);
+  $('pageTitle').textContent = m? m.label : '';
+  if(productsUnsub){ productsUnsub(); productsUnsub=null; }
+  if(usersUnsub){ usersUnsub(); usersUnsub=null; }
+
+  if(id==='prod')      renderProducts();
+  else if(id==='settings') renderSettings();
+  else renderPlaceholder(m?m.label:'');
+}
+
+function renderPlaceholder(label){
+  $('page').innerHTML =
+    '<div class="card"><div class="empty">'+escHtml(label)+' 메뉴는 다음 단계에서 추가됩니다.<br><small>현재 1단계: 로그인 · 제품관리 · 사용자관리</small></div></div>';
+}
+
+/* ── 제품관리 ── */
+const canWrite = ()=> currentUser && (currentUser.role==='super'||currentUser.role==='admin');
+
+function renderProducts(){
+  const writeBtns = canWrite()
+    ? '<div style="display:flex;gap:8px"><button id="seedBtn" class="btn btn-ghost btn-sm">기본 4제품 등록</button><button id="addProdBtn" class="btn btn-sm">+ 제품 추가</button></div>'
+    : '';
+  $('page').innerHTML =
+    '<div class="card"><div class="card-h"><div class="t">제품 목록</div>'+writeBtns+'</div>'+
+    '<div id="prodTable"><div class="empty">불러오는 중...</div></div></div>';
+
+  if(canWrite()){
+    $('addProdBtn').addEventListener('click',()=>openProdModal(null));
+    $('seedBtn').addEventListener('click',seedProducts);
+  }
+
+  const r = ref(db,'gmp_data/products');
+  const cb = onValue(r,(snap)=>{
+    const val = snap.val()||{};
+    const rows = Object.keys(val).map(k=>Object.assign({_id:k}, val[k]));
+    rows.sort((a,b)=>String(a.name).localeCompare(String(b.name),'ko'));
+    drawProdTable(rows);
+  },(err)=>{ $('prodTable').innerHTML='<div class="empty">읽기 권한이 없거나 오류가 발생했습니다.<br><small>'+escHtml(err.message)+'</small></div>'; });
+  productsUnsub = ()=>off(r,'value',cb);
+}
+
+function drawProdTable(rows){
+  if(!rows.length){ $('prodTable').innerHTML='<div class="empty">등록된 제품이 없습니다.'+(canWrite()?' 위의 “기본 4제품 등록” 또는 “+ 제품 추가”로 시작하세요.':'')+'</div>'; return; }
+  let html='<table><thead><tr><th>제품명</th><th>모델명</th><th>제조사</th><th>멸균</th><th>유효기간</th><th>GTIN</th>'+(canWrite()?'<th></th>':'')+'</tr></thead><tbody>';
+  rows.forEach(p=>{
+    const ster = p.sterile? '<span class="pill amber">멸균</span>' : '<span class="pill green">비멸균</span>';
+    const gtins = (p.gtins&&p.gtins.length)? escHtml(p.gtins.join(', ')) : '<span style="color:var(--muted)">-</span>';
+    html+='<tr>'+
+      '<td><b>'+escHtml(p.name)+'</b></td>'+
+      '<td>'+escHtml(p.model)+'</td>'+
+      '<td>'+escHtml(p.maker)+'</td>'+
+      '<td>'+ster+'</td>'+
+      '<td>'+escHtml((p.shelfMonths||36))+'개월</td>'+
+      '<td>'+gtins+'</td>';
+    if(canWrite()){
+      html+='<td><div class="actions-cell">'+
+        '<button class="btn btn-ghost btn-sm" data-edit="'+escHtml(p._id)+'">수정</button>'+
+        '<button class="btn btn-danger btn-sm" data-del="'+escHtml(p._id)+'">삭제</button></div></td>';
+    }
+    html+='</tr>';
+  });
+  html+='</tbody></table>';
+  const wrap=$('prodTable'); wrap.innerHTML=html;
+  if(canWrite()){
+    wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>{
+      const id=b.getAttribute('data-edit'); const row=rows.find(x=>x._id===id); openProdModal(row);
+    }));
+    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
+      const id=b.getAttribute('data-del'); const row=rows.find(x=>x._id===id); delProduct(row);
+    }));
+  }
+}
+
+function openProdModal(row){
+  const isEdit=!!row;
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML=
+    '<div class="modal"><h3>'+(isEdit?'제품 수정':'제품 추가')+'</h3>'+
+    '<div class="field"><label>제품명 (GMP 실제명)</label><input id="f_name" value="'+escHtml(isEdit?row.name:'')+'"></div>'+
+    '<div class="row2"><div class="field"><label>모델명</label><input id="f_model" value="'+escHtml(isEdit?row.model:'')+'"></div>'+
+    '<div class="field"><label>유효기간(개월)</label><input id="f_shelf" type="number" value="'+escHtml(isEdit?(row.shelfMonths||36):36)+'"></div></div>'+
+    '<div class="field"><label>제조사</label><input id="f_maker" value="'+escHtml(isEdit?row.maker:'')+'"></div>'+
+    '<div class="field"><label>수입업체</label><input id="f_importer" value="'+escHtml(isEdit?(row.importer||'AMT Korea'):'AMT Korea')+'"></div>'+
+    '<div class="field"><label>GTIN (여러 개면 쉼표로 구분)</label><input id="f_gtins" value="'+escHtml(isEdit&&row.gtins?row.gtins.join(', '):'')+'" placeholder="예: 08809885420048"></div>'+
+    '<div class="field"><label class="chk"><input id="f_sterile" type="checkbox" '+(isEdit&&row.sterile?'checked':'')+'> 멸균제품 (멸균성적서 필요)</label></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="f_cancel">취소</button><button class="btn" id="f_save">저장</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#f_cancel').addEventListener('click',()=>m.remove());
+  m.querySelector('#f_save').addEventListener('click',async()=>{
+    const name=(m.querySelector('#f_name').value||'').trim();
+    if(!name){ toast('제품명을 입력하세요'); return; }
+    const gtins=(m.querySelector('#f_gtins').value||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+    const data={
+      name,
+      model:(m.querySelector('#f_model').value||'').trim(),
+      maker:(m.querySelector('#f_maker').value||'').trim(),
+      importer:(m.querySelector('#f_importer').value||'AMT Korea').trim(),
+      shelfMonths:parseInt(m.querySelector('#f_shelf').value||'36',10)||36,
+      gtins,
+      sterile:m.querySelector('#f_sterile').checked,
+      updatedAt:Date.now()
+    };
+    try{
+      if(isEdit){
+        await update(ref(db,'gmp_data/products/'+row._id), data);
+        logAudit('수정','제품 수정: '+name);
+      }else{
+        data.createdAt=Date.now();
+        await push(ref(db,'gmp_data/products'), data);
+        logAudit('등록','제품 등록: '+name);
+      }
+      toast('저장되었습니다'); m.remove();
+    }catch(e){ toast('저장 실패: '+e.message); }
+  });
+}
+
+async function delProduct(row){
+  if(!row) return;
+  if(!confirm('“'+row.name+'” 제품을 삭제할까요?')) return;
+  try{
+    await set(ref(db,'gmp_data/products/'+row._id), null);
+    logAudit('삭제','제품 삭제: '+row.name);
+    toast('삭제되었습니다');
+  }catch(e){ toast('삭제 실패: '+e.message); }
+}
+
+const SEED_PRODUCTS=[
+  {name:'JUC Spray Dressing', model:'JUC10', gtins:['10692227850034'], maker:'NMS Technologies Co.,Ltd.', importer:'AMT Korea', sterile:false, shelfMonths:36},
+  {name:'DELL',     model:'DELL1', gtins:[], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36},
+  {name:'MEDIAS T', model:'TP',    gtins:['08809885420048'], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36},
+  {name:'MEDIAS',   model:'WTP',   gtins:[], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36}
+];
+
+async function seedProducts(){
+  const snap = await get(ref(db,'gmp_data/products'));
+  const exist = snap.val()||{};
+  const names = Object.values(exist).map(p=>p.name);
+  const toAdd = SEED_PRODUCTS.filter(p=>!names.includes(p.name));
+  if(!toAdd.length){ toast('이미 4제품이 모두 등록되어 있습니다'); return; }
+  if(!confirm(toAdd.length+'개 제품을 등록할까요? ('+toAdd.map(p=>p.name).join(', ')+')')) return;
+  try{
+    for(const p of toAdd){
+      await push(ref(db,'gmp_data/products'), Object.assign({createdAt:Date.now(),updatedAt:Date.now()}, p));
+    }
+    logAudit('등록','기본 제품 '+toAdd.length+'개 일괄 등록');
+    toast(toAdd.length+'개 등록 완료');
+  }catch(e){ toast('등록 실패: '+e.message); }
+}
+
+/* ── 설정: 사용자관리 (총괄 전용) ── */
+function renderSettings(){
+  $('page').innerHTML=
+    '<div class="card"><div class="card-h"><div class="t">사용자 관리</div>'+
+    '<button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div>'+
+    '<div id="userTable"><div class="empty">불러오는 중...</div></div></div>';
+  $('addUserBtn').addEventListener('click',()=>openUserModal());
+
+  const r=ref(db,'gmp_admins');
+  const cb=onValue(r,(snap)=>{
+    const val=snap.val()||{};
+    const rows=Object.keys(val).map(k=>Object.assign({_key:k},val[k]));
+    rows.sort((a,b)=>String(a.name).localeCompare(String(b.name),'ko'));
+    drawUserTable(rows);
+  },(err)=>{ $('userTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  usersUnsub=()=>off(r,'value',cb);
+}
+
+function drawUserTable(rows){
+  if(!rows.length){ $('userTable').innerHTML='<div class="empty">등록된 사용자가 없습니다.</div>'; return; }
+  let html='<table><thead><tr><th>이름</th><th>이메일</th><th>권한</th><th></th></tr></thead><tbody>';
+  rows.forEach(u=>{
+    const roleLabel={super:'총괄관리자',admin:'관리자',viewer:'조회자'}[u.role]||u.role;
+    const isSelf = currentUser && u.email===currentUser.email;
+    html+='<tr><td><b>'+escHtml(u.name)+'</b></td><td>'+escHtml(u.email)+'</td>'+
+      '<td><span class="pill '+(u.role==='viewer'?'green':'amber')+'">'+escHtml(roleLabel)+'</span></td>'+
+      '<td><div class="actions-cell">'+
+      (u.role==='super'||isSelf ? '<span style="color:var(--muted);font-size:12px">—</span>'
+        : '<button class="btn btn-ghost btn-sm" data-uedit="'+escHtml(u._key)+'">수정</button>'+
+          '<button class="btn btn-danger btn-sm" data-udel="'+escHtml(u._key)+'">삭제</button>')+
+      '</div></td></tr>';
+  });
+  html+='</tbody></table>';
+  const wrap=$('userTable'); wrap.innerHTML=html;
+  wrap.querySelectorAll('[data-uedit]').forEach(b=>b.addEventListener('click',()=>{
+    const k=b.getAttribute('data-uedit'); openUserModal(rows.find(x=>x._key===k));
+  }));
+  wrap.querySelectorAll('[data-udel]').forEach(b=>b.addEventListener('click',()=>{
+    const k=b.getAttribute('data-udel'); delUser(rows.find(x=>x._key===k));
+  }));
+}
+
+function openUserModal(row){
+  const isEdit=!!row;
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML=
+    '<div class="modal"><h3>'+(isEdit?'사용자 수정':'사용자 추가')+'</h3>'+
+    '<div class="field"><label>이름</label><input id="u_name" value="'+escHtml(isEdit?row.name:'')+'"></div>'+
+    '<div class="field"><label>이메일</label><input id="u_email" type="email" value="'+escHtml(isEdit?row.email:'')+'" '+(isEdit?'disabled style="background:#f3f4f6"':'')+'></div>'+
+    '<div class="row2"><div class="field"><label>코드(비밀번호)</label><input id="u_code" value="'+escHtml(isEdit?row.code:'')+'"></div>'+
+    '<div class="field"><label>권한</label><select id="u_role"><option value="admin"'+(isEdit&&row.role==='admin'?' selected':'')+'>관리자</option><option value="viewer"'+(isEdit&&row.role==='viewer'?' selected':'')+'>조회자</option></select></div></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="u_cancel">취소</button><button class="btn" id="u_save">저장</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#u_cancel').addEventListener('click',()=>m.remove());
+  m.querySelector('#u_save').addEventListener('click',async()=>{
+    const name=(m.querySelector('#u_name').value||'').trim();
+    const email=(m.querySelector('#u_email').value||'').trim().toLowerCase();
+    const code=(m.querySelector('#u_code').value||'').trim();
+    const role=m.querySelector('#u_role').value;
+    if(!name||!email||!code){ toast('이름·이메일·코드를 모두 입력하세요'); return; }
+    const key=emailKey(email);
+    try{
+      await set(ref(db,'gmp_admins/'+key), {email, name, code, role, updatedAt:Date.now()});
+      // 화이트리스트 갱신: 권한에 맞는 쪽에 등록, 반대쪽 제거
+      if(role==='admin'){ await set(ref(db,'admin_emails/'+key),true); await set(ref(db,'viewer_emails/'+key),null); }
+      else{ await set(ref(db,'viewer_emails/'+key),true); await set(ref(db,'admin_emails/'+key),null); }
+      logAudit(isEdit?'수정':'등록','사용자 '+(isEdit?'수정':'등록')+': '+name+' ('+role+')');
+      toast('저장되었습니다'); m.remove();
+    }catch(e){ toast('저장 실패: '+e.message); }
+  });
+}
+
+async function delUser(row){
+  if(!row) return;
+  if(!confirm('“'+row.name+'” 사용자를 삭제할까요? (로그인 불가가 됩니다)')) return;
+  const key=row._key;
+  try{
+    await set(ref(db,'gmp_admins/'+key), null);
+    await set(ref(db,'admin_emails/'+key), null);
+    await set(ref(db,'viewer_emails/'+key), null);
+    logAudit('삭제','사용자 삭제: '+row.name);
+    toast('삭제되었습니다');
+  }catch(e){ toast('삭제 실패: '+e.message); }
+}
+
+/* ── 이벤트 바인딩 ── */
+$('loginBtn').addEventListener('click', doLogin);
+$('loginCode').addEventListener('keydown',(e)=>{ if(e.key==='Enter') doLogin(); });
+$('loginEmail').addEventListener('keydown',(e)=>{ if(e.key==='Enter') $('loginCode').focus(); });
+$('logoutBtn').addEventListener('click', doLogout);
+$('menuToggle').addEventListener('click',()=>$('side').classList.toggle('open'));
+
+/* ── 세션 복원 ── */
+onAuthStateChanged(auth, async (user)=>{
+  if(loggingIn) return;
+  if(user && !currentUser){
+    try{
+      const rec=(await get(ref(db,'gmp_admins/'+emailKey(user.email)))).val();
+      if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); }
+      else { await signOut(auth); showLogin(); }
+    }catch(e){ showLogin(); }
+  }else if(!user){
+    currentUser=null; showLogin();
+  }
+});
+</script>
+</body>
+</html>
