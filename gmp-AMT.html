@@ -31,6 +31,7 @@
   .btn-ghost:hover{background:#f3f4f6}
   .btn-danger{background:var(--red)}
   .btn-danger:hover{background:#b91c1c}
+  .btn-blue{background:var(--blue)}
   .btn-sm{padding:6px 11px;font-size:12px;border-radius:7px}
   .err{color:var(--red);font-size:12px;margin-top:10px;min-height:16px}
 
@@ -86,8 +87,9 @@
   .modal-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
   .chk{display:flex;align-items:center;gap:8px}
   .chk input{width:auto}
+  .ro{background:#f3f4f6;color:var(--muted)}
 
-  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;z-index:80;pointer-events:none}
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;z-index:90;pointer-events:none}
   #toast.show{opacity:1}
 
   @media(max-width:760px){
@@ -139,7 +141,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getDatabase, ref, get, set, update, push, onValue, off }
   from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-/* ── GMP DB (amt-gmp / amtkorea). API키 노출은 보안규칙으로 보호되므로 정상 ── */
+/* ── GMP DB (amt-gmp / amtkorea) ── */
 const firebaseConfig = {
   apiKey: "AIzaSyBy3A5kZU-XdzBUIpdLNTrFJnrlWcYEtt8",
   authDomain: "amt-gmp.firebaseapp.com",
@@ -153,7 +155,7 @@ const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getDatabase(app);
 
-/* ── 운영앱 DB (amt-ky / amedtech) : 읽기 전용 연결 (수입·내부거래 가져오기) ── */
+/* ── 운영앱 DB (amt-ky / amedtech) : 읽기 전용 ── */
 const amtKyConfig = {
   apiKey: "AIzaSyC2jfTHmaguOS9e_ddTvicUZJcvXzQ7EKI",
   authDomain: "amt-ky.firebaseapp.com",
@@ -166,7 +168,6 @@ const amtKyConfig = {
 const appAmt  = initializeApp(amtKyConfig, 'amt');
 const authAmt = getAuth(appAmt);
 const dbAmt   = getDatabase(appAmt);
-// 운영앱과 동일한 더미 패스워드 패턴
 function amtKyPw(email){ return 'amtky2026_' + String(email||'').toLowerCase().replace(/[^a-z0-9]/g,'_') + '_x'; }
 
 const SUPER_EMAIL = "kyunghoyou@gmail.com";
@@ -174,26 +175,29 @@ const SUPER_EMAIL = "kyunghoyou@gmail.com";
 /* ── 공통 헬퍼 ── */
 function escHtml(s){
   if(s==null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function emailKey(email){ return String(email||'').trim().toLowerCase().replace(/\./g,','); }
 function $(id){ return document.getElementById(id); }
 function fmt(n){ return Number(n||0).toLocaleString('ko-KR'); }
-function toast(msg){
-  const t=$('toast'); t.textContent=msg; t.classList.add('show');
-  clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('show'),2200);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('show'),2400); }
+// 제조일 + 개월 - 1일 (라벨 "제조일로부터 N년까지" 규칙)
+function addMonthsMinus1(dateStr, months){
+  if(!dateStr) return '';
+  const d=new Date(dateStr+'T00:00:00'); if(isNaN(d.getTime())) return '';
+  d.setMonth(d.getMonth()+months); d.setDate(d.getDate()-1);
+  return d.toISOString().slice(0,10);
 }
 
 let currentUser = null;
 let loggingIn   = false;
-let productsUnsub = null;
+let productsUnsub = null;   // 화면 전환 시 해제되는 리스너 슬롯
 let usersUnsub = null;
 
-/* ── 운영앱 제품명 → GMP 제품명 매핑 (MEDIAS는 T/WTP 분할) ── */
+/* ── 운영앱 제품명 → GMP 제품명 (MEDIAS 분할) ── */
 function gmpProductsFor(opProduct){
   const p = String(opProduct||'').trim().toUpperCase();
-  if(p==='MEDIAS') return ['MEDIAS T','MEDIAS'];   // 한 봉투 = TP + WTP
+  if(p==='MEDIAS') return ['MEDIAS T','MEDIAS'];
   if(p==='JUC')    return ['JUC Spray Dressing'];
   if(p==='DELL')   return ['DELL'];
   return [opProduct];
@@ -201,13 +205,7 @@ function gmpProductsFor(opProduct){
 
 /* ── 감사기록 ── */
 async function logAudit(action, detail){
-  try{
-    await push(ref(db,'gmp_audit'),{
-      ts: Date.now(),
-      user: currentUser ? (currentUser.name+' <'+currentUser.email+'>') : 'unknown',
-      action, detail: detail||''
-    });
-  }catch(_){}
+  try{ await push(ref(db,'gmp_audit'),{ ts:Date.now(), user: currentUser?(currentUser.name+' <'+currentUser.email+'>'):'unknown', action, detail:detail||'' }); }catch(_){}
 }
 
 /* ── 로그인 ── */
@@ -221,18 +219,14 @@ async function doLogin(){
   const code  = ($('loginCode').value||'').trim();
   const errEl = $('loginErr'); errEl.textContent='';
   if(!email || !code){ errEl.textContent='이메일과 코드를 모두 입력하세요.'; return; }
-  const btn=$('loginBtn'); btn.disabled=true; btn.textContent='확인 중...';
-  loggingIn=true;
+  const btn=$('loginBtn'); btn.disabled=true; btn.textContent='확인 중...'; loggingIn=true;
   try{
     await ensureAuth(email);
     const key = emailKey(email);
-    const snap = await get(ref(db,'gmp_admins/'+key));
-    let rec = snap.val();
+    let rec = (await get(ref(db,'gmp_admins/'+key))).val();
     if(!rec){
-      if(email === SUPER_EMAIL){
-        rec = { email, name:'유경호', code, role:'super', createdAt: Date.now() };
-        await set(ref(db,'gmp_admins/'+key), rec);
-      }else{ await signOut(auth); throw new Error('등록되지 않은 사용자입니다. 총괄관리자에게 등록을 요청하세요.'); }
+      if(email === SUPER_EMAIL){ rec={ email, name:'유경호', code, role:'super', createdAt:Date.now() }; await set(ref(db,'gmp_admins/'+key), rec); }
+      else{ await signOut(auth); throw new Error('등록되지 않은 사용자입니다. 총괄관리자에게 등록을 요청하세요.'); }
     }
     if(String(rec.code) !== String(code)){ await signOut(auth); throw new Error('코드가 일치하지 않습니다.'); }
     currentUser = { email, name: rec.name||email, role: rec.role||'viewer' };
@@ -243,9 +237,7 @@ async function doLogin(){
   finally{ loggingIn=false; btn.disabled=false; btn.textContent='로그인'; }
 }
 async function cleanupPlaceholder(){
-  if(currentUser && currentUser.role==='super'){
-    try{ await set(ref(db,'viewer_emails/placeholder@example,com'), null); }catch(_){}
-  }
+  if(currentUser && currentUser.role==='super'){ try{ await set(ref(db,'viewer_emails/placeholder@example,com'), null); }catch(_){} }
 }
 async function doLogout(){
   logAudit('로그아웃','사용자 '+(currentUser?currentUser.name:'')+' 로그아웃');
@@ -256,11 +248,7 @@ async function doLogout(){
   await signOut(auth);
   showLogin();
 }
-function showLogin(){
-  $('mainView').classList.add('hidden');
-  $('loginView').classList.remove('hidden');
-  $('loginCode').value='';
-}
+function showLogin(){ $('mainView').classList.add('hidden'); $('loginView').classList.remove('hidden'); $('loginCode').value=''; }
 
 const MENUS = [
   {id:'dash',   label:'대시보드',        ready:false},
@@ -276,8 +264,7 @@ const MENUS = [
 ];
 
 function renderMain(){
-  $('loginView').classList.add('hidden');
-  $('mainView').classList.remove('hidden');
+  $('loginView').classList.add('hidden'); $('mainView').classList.remove('hidden');
   const roleLabel = {super:'총괄관리자', admin:'관리자', viewer:'조회자'}[currentUser.role]||currentUser.role;
   $('sideUser').textContent = currentUser.name;
   $('sideRole').innerHTML = '<span class="badge '+(currentUser.role==='viewer'?'gray':'')+'">'+escHtml(roleLabel)+'</span>';
@@ -285,8 +272,7 @@ function renderMain(){
   const menu=$('menu'); menu.innerHTML='';
   MENUS.forEach(m=>{
     if(m.superOnly && currentUser.role!=='super') return;
-    const a=document.createElement('button');
-    a.className='menu-link'; a.dataset.id=m.id;
+    const a=document.createElement('button'); a.className='menu-link'; a.dataset.id=m.id;
     a.innerHTML='<span class="dot"></span><span>'+escHtml(m.label)+'</span>'+(m.ready?'':'<span class="badge gray" style="margin-left:auto">준비중</span>');
     a.addEventListener('click',()=>{ navTo(m.id); if(window.innerWidth<=760) $('side').classList.remove('open'); });
     menu.appendChild(a);
@@ -304,15 +290,12 @@ function navTo(id){
   else if(id==='settings') renderSettings();
   else renderPlaceholder(m?m.label:'');
 }
-function renderPlaceholder(label){
-  $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(label)+' 메뉴는 다음 단계에서 추가됩니다.</div></div>';
-}
+function renderPlaceholder(label){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(label)+' 메뉴는 다음 단계에서 추가됩니다.</div></div>'; }
 
 /* ── 제품관리 ── */
 const canWrite = ()=> currentUser && (currentUser.role==='super'||currentUser.role==='admin');
 function renderProducts(){
-  const writeBtns = canWrite()
-    ? '<div style="display:flex;gap:8px"><button id="seedBtn" class="btn btn-ghost btn-sm">기본 4제품 등록</button><button id="addProdBtn" class="btn btn-sm">+ 제품 추가</button></div>' : '';
+  const writeBtns = canWrite() ? '<div style="display:flex;gap:8px"><button id="seedBtn" class="btn btn-ghost btn-sm">기본 4제품 등록</button><button id="addProdBtn" class="btn btn-sm">+ 제품 추가</button></div>' : '';
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">제품 목록</div>'+writeBtns+'</div><div id="prodTable"><div class="empty">불러오는 중...</div></div></div>';
   if(canWrite()){ $('addProdBtn').addEventListener('click',()=>openProdModal(null)); $('seedBtn').addEventListener('click',seedProducts); }
   const r = ref(db,'gmp_data/products');
@@ -337,8 +320,8 @@ function drawProdTable(rows){
   html+='</tbody></table>';
   const wrap=$('prodTable'); wrap.innerHTML=html;
   if(canWrite()){
-    wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>{ const row=rows.find(x=>x._id===b.getAttribute('data-edit')); openProdModal(row); }));
-    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{ const row=rows.find(x=>x._id===b.getAttribute('data-del')); delProduct(row); }));
+    wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>openProdModal(rows.find(x=>x._id===b.getAttribute('data-edit')))));
+    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>delProduct(rows.find(x=>x._id===b.getAttribute('data-del')))));
   }
 }
 function openProdModal(row){
@@ -382,8 +365,7 @@ const SEED_PRODUCTS=[
   {name:'MEDIAS',   model:'WTP',   gtins:['08809885420031'], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36}
 ];
 async function seedProducts(){
-  const snap = await get(ref(db,'gmp_data/products'));
-  const exist = snap.val()||{};
+  const exist = (await get(ref(db,'gmp_data/products'))).val()||{};
   const names = Object.values(exist).map(p=>p.name);
   const toAdd = SEED_PRODUCTS.filter(p=>!names.includes(p.name));
   if(!toAdd.length){ toast('이미 4제품이 모두 등록되어 있습니다'); return; }
@@ -394,101 +376,222 @@ async function seedProducts(){
   }catch(e){ toast('등록 실패: '+e.message); }
 }
 
-/* ── LOT 관리 · 입고 (2-A: 운영앱 수입 자동 입고대기) ── */
+/* ════════ LOT 관리 · 입고 (2-B) ════════ */
 let amtKy = { status:'idle', invLogs:[], internalTrades:[], err:'' };
+let prodMap = {};   // 제품명 → 제품객체
 
 async function connectAmtKy(){
   if(!currentUser){ amtKy={status:'noauth',invLogs:[],internalTrades:[],err:''}; return; }
   try{
     await signInWithEmailAndPassword(authAmt, currentUser.email, amtKyPw(currentUser.email));
-    const snap = await get(ref(dbAmt,'amt_data'));
-    const data = snap.val()||{};
-    let inv = data.invLogs||[];          if(!Array.isArray(inv)) inv = Object.values(inv);
-    let it  = data.internalTrades||[];   if(!Array.isArray(it))  it  = Object.values(it);
+    const data = (await get(ref(dbAmt,'amt_data'))).val()||{};
+    let inv = data.invLogs||[];        if(!Array.isArray(inv)) inv = Object.values(inv);
+    let it  = data.internalTrades||[]; if(!Array.isArray(it))  it  = Object.values(it);
     amtKy = { status:'ok', invLogs:inv.filter(Boolean), internalTrades:it.filter(Boolean), err:'' };
   }catch(e){
-    const code = e.code||'';
-    if(code.includes('invalid-credential')||code.includes('wrong-password')||code.includes('user-not-found')){
+    const code=e.code||'';
+    if(code.includes('invalid-credential')||code.includes('wrong-password')||code.includes('user-not-found'))
       amtKy = { status:'noaccess', invLogs:[], internalTrades:[], err:'운영앱 계정 권한 없음' };
-    }else{
-      amtKy = { status:'error', invLogs:[], internalTrades:[], err:(e.message||String(e)) };
-    }
+    else amtKy = { status:'error', invLogs:[], internalTrades:[], err:(e.message||String(e)) };
   }
 }
-
-// 운영앱 invLogs 중 '수입' 건만 추출
 function importLogs(){
-  return amtKy.invLogs.filter(i =>
-    (i.company||'AMT')==='AMT' &&
-    i.type==='adjust' &&
-    Number(i.qty)>0 &&
-    String(i.memo||'').includes('수입')
-  );
+  return amtKy.invLogs.filter(i => (i.company||'AMT')==='AMT' && i.type==='adjust' && Number(i.qty)>0 && String(i.memo||'').includes('수입'));
 }
 
 async function renderLot(){
   $('page').innerHTML='<div class="card"><div class="empty">운영앱(AMT) 연결 중...</div></div>';
   await connectAmtKy();
 
-  // 연결 상태 배너
+  // 제품 맵 로드
+  const pv = (await get(ref(db,'gmp_data/products'))).val()||{};
+  prodMap = {}; Object.keys(pv).forEach(k=>{ const p=Object.assign({_id:k},pv[k]); prodMap[p.name]=p; });
+
   let banner='';
-  if(amtKy.status==='ok'){
-    banner='<div class="banner ok">✅ 운영앱(AMT) 연결됨 · 수입 기록 <b>'+importLogs().length+'</b>건 확인</div>';
-  }else if(amtKy.status==='noaccess'){
-    banner='<div class="banner warn">⚠️ 운영앱 접근 권한이 없습니다. 수입 자동연동은 <b>운영앱 관리자</b>(유경호 등) 계정으로만 가능합니다. (LOT 목록은 정상 표시됩니다)</div>';
-  }else{
-    banner='<div class="banner bad">❌ 운영앱 연결 실패: '+escHtml(amtKy.err)+'</div>';
-  }
+  if(amtKy.status==='ok') banner='<div class="banner ok">✅ 운영앱(AMT) 연결됨 · 수입 기록 <b>'+importLogs().length+'</b>건 확인</div>';
+  else if(amtKy.status==='noaccess') banner='<div class="banner warn">⚠️ 운영앱 접근 권한 없음. 수입 자동연동은 <b>운영앱 관리자</b>(유경호 등)만 가능합니다. (LOT 목록은 정상)</div>';
+  else banner='<div class="banner bad">❌ 운영앱 연결 실패: '+escHtml(amtKy.err)+'</div>';
 
   $('page').innerHTML = banner +
     '<div class="card"><div class="card-h"><div class="t">입고 대기 (운영앱 “수입” 자동연동)</div></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 재고조정에서 “수입”으로 입력된 건입니다. MEDIAS 수입은 MEDIAS T·MEDIAS 두 건으로 나뉩니다. (다음 단계에서 여기서 바로 LOT 등록·GS1 스캔)</div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">“LOT 등록”을 누르면 GS1 매트릭스를 스캔해 LOT·제조일·유통기한이 자동 입력됩니다. (폰 카메라 권장)</div>'+
     '<div id="pendingTable"></div></div>'+
     '<div class="card"><div class="card-h"><div class="t">LOT 목록</div></div><div id="lotTable"></div></div>';
 
-  drawPending();
-  drawLotList();
+  // LOT 실시간 → 입고대기/목록 같이 갱신
+  const r=ref(db,'gmp_data/lots');
+  const cb=onValue(r,(snap)=>{
+    const val=snap.val()||{};
+    const lots=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    drawPending(lots);
+    drawLotList(lots);
+  },(err)=>{ $('lotTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  productsUnsub=()=>off(r,'value',cb);
 }
 
-function drawPending(){
-  const imps = importLogs();
+function drawPending(lots){
   if(amtKy.status!=='ok'){ $('pendingTable').innerHTML='<div class="empty">운영앱 연결 시 수입 건이 표시됩니다.</div>'; return; }
-  if(!imps.length){ $('pendingTable').innerHTML='<div class="empty">대기 중인 수입 건이 없습니다.</div>'; return; }
-  // 최신순
-  imps.sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-  let html='<table><thead><tr><th>수입일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>메모</th><th>상태</th></tr></thead><tbody>';
+  const done = new Set(lots.map(l=>String(l.srcInvId)+'|'+l.product));
+  const imps = importLogs().slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  const rows=[];
   imps.forEach(i=>{
-    const gmps = gmpProductsFor(i.product);
-    gmps.forEach((gp,idx)=>{
-      html+='<tr>'+
-        '<td>'+escHtml(i.date)+'</td>'+
-        '<td>'+(idx===0?escHtml(i.product):'<span style="color:var(--muted)">↳ 분할</span>')+'</td>'+
-        '<td><b>'+escHtml(gp)+'</b></td>'+
-        '<td>'+fmt(i.qty)+'</td>'+
-        '<td>'+escHtml(i.memo||'')+'</td>'+
-        '<td><span class="pill amber">LOT 등록 대기</span></td>'+
-        '</tr>';
+    gmpProductsFor(i.product).forEach(gp=>{
+      if(!done.has(String(i.id)+'|'+gp)) rows.push({ srcInvId:i.id, opProduct:i.product, gmpProduct:gp, qty:i.qty, date:i.date, memo:i.memo||'' });
     });
   });
+  if(!rows.length){ $('pendingTable').innerHTML='<div class="empty">대기 중인 수입 건이 없습니다. (모두 LOT 등록됨)</div>'; return; }
+  let html='<table><thead><tr><th>수입일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>메모</th><th></th></tr></thead><tbody>';
+  rows.forEach((r,idx)=>{
+    html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.gmpProduct)+'</b></td><td>'+fmt(r.qty)+'</td><td>'+escHtml(r.memo)+'</td>'+
+      '<td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-reg="'+idx+'">LOT 등록</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>';
+  });
   html+='</tbody></table>';
-  $('pendingTable').innerHTML=html;
+  const wrap=$('pendingTable'); wrap.innerHTML=html;
+  if(canWrite()) wrap.querySelectorAll('[data-reg]').forEach(b=>b.addEventListener('click',()=>openLotModal(rows[parseInt(b.getAttribute('data-reg'),10)])));
 }
 
-function drawLotList(){
-  const r=ref(db,'gmp_data/lots');
-  onValue(r,(snap)=>{
-    const val=snap.val()||{};
-    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
-    if(!rows.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다. (다음 단계에서 입고대기 → LOT 등록 기능 추가)</div>'; return; }
-    rows.sort((a,b)=>String(b.createdAt||0)-Number(a.createdAt||0));
-    let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>초기재고</th><th>현재재고</th></tr></thead><tbody>';
-    rows.forEach(l=>{ html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td></tr>'; });
-    html+='</tbody></table>';
-    $('lotTable').innerHTML=html;
-  },(err)=>{ $('lotTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+function drawLotList(lots){
+  if(!lots.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다.</div>'; return; }
+  lots.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
+  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>초기재고</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
+  lots.forEach(l=>{
+    const ins = (l.inspectInStatus==='done') ? '<span class="pill green">완료</span>' : '<span class="pill amber">대기</span>';
+    html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td><td>'+ins+'</td></tr>';
+  });
+  html+='</tbody></table>';
+  $('lotTable').innerHTML=html;
 }
 
-/* ── 설정: 사용자관리 (총괄 전용) ── */
+/* ── GS1 DataMatrix 파서 (괄호형식 + FNC1 raw 둘 다 지원) ── */
+function parseGs1(raw){
+  let s=String(raw||'');
+  const out={};
+  if(s.indexOf('(')>=0){
+    const re=/\((\d{2,4})\)([^()]*)/g; let m;
+    while((m=re.exec(s))){ out[m[1]]=(m[2]||'').trim(); }
+  }else{
+    s=s.replace(/^\]d2/,'').replace(/^\]C1/,'').replace(/^\]Q3/,'');
+    const GS='\x1d'; const fixed={'00':18,'01':14,'11':6,'12':6,'13':6,'15':6,'16':6,'17':6,'20':2};
+    let i=0;
+    while(i<s.length){
+      const ai=s.substr(i,2); i+=2;
+      if(fixed[ai]!=null){ out[ai]=s.substr(i,fixed[ai]); i+=fixed[ai]; }
+      else{ let g=s.indexOf(GS,i); if(g<0) g=s.length; out[ai]=s.substring(i,g); i=g; if(s[i]===GS) i++; }
+    }
+  }
+  const ymd=(v)=>{ if(!v||v.length<6) return ''; const y='20'+v.substr(0,2), mm=v.substr(2,2); let dd=v.substr(4,2); if(dd==='00') dd='01'; return y+'-'+mm+'-'+dd; };
+  return { gtin:(out['01']||'').replace(/\s/g,''), lot:out['10']||'', prodDate:ymd(out['11']), expDate:ymd(out['17']), serial:out['21']||'' };
+}
+
+/* ── 카메라 스캔 (BarcodeDetector, Pixel9 Chrome 지원) ── */
+async function openScanner(onResult){
+  let detector;
+  try{
+    if(!('BarcodeDetector' in window)) throw new Error('이 브라우저는 자동 스캔 미지원');
+    const fmts = await window.BarcodeDetector.getSupportedFormats();
+    if(!fmts.includes('data_matrix')) throw new Error('이 기기는 DataMatrix 스캔 미지원');
+    detector = new window.BarcodeDetector({formats:['data_matrix']});
+  }catch(e){ toast('자동 스캔 불가 — 수동 입력하세요 ('+e.message+')'); return; }
+
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal" style="max-width:420px"><h3>GS1 매트릭스 스캔</h3>'+
+    '<video id="scanVid" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover"></video>'+
+    '<div style="color:var(--muted);font-size:12px;margin-top:8px">박스의 GS1 DataMatrix를 화면에 비추세요. 자동으로 인식됩니다.</div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="scanCancel">취소</button></div></div>';
+  document.body.appendChild(m);
+  const vid=m.querySelector('#scanVid');
+  let stream=null, raf=0, stopped=false;
+  function stop(){ stopped=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); m.remove(); }
+  m.querySelector('#scanCancel').addEventListener('click', stop);
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} } });
+    vid.srcObject=stream; await vid.play();
+  }catch(e){ toast('카메라 접근 실패: '+(e.message||e)); stop(); return; }
+  async function tick(){
+    if(stopped) return;
+    try{
+      const codes = await detector.detect(vid);
+      if(codes && codes.length){ const raw=codes[0].rawValue; stop(); onResult(parseGs1(raw)); return; }
+    }catch(_){}
+    raf=requestAnimationFrame(tick);
+  }
+  raf=requestAnimationFrame(tick);
+}
+
+function openLotModal(p){
+  const prod = prodMap[p.gmpProduct] || {};
+  const shelf = prod.shelfMonths || 36;
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal"><h3>LOT 등록 — '+escHtml(p.gmpProduct)+'</h3>'+
+    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 스캔</button>'+
+    '<div style="color:var(--muted);font-size:11px;margin-top:6px;text-align:center">스캔하면 LOT·제조일·유통기한이 자동 입력됩니다 (폰에서)</div></div>'+
+    '<div class="field"><label>제품 (운영앱 '+escHtml(p.opProduct)+' / 수입 '+escHtml(p.date)+')</label><input class="ro" value="'+escHtml(p.gmpProduct)+'" disabled></div>'+
+    '<div class="field"><label>LOT 번호</label><input id="l_lot" placeholder="예: 25040728"></div>'+
+    '<div class="row2"><div class="field"><label>제조일자</label><input id="l_pdate" type="date"></div><div class="field"><label>유통기한 <span style="font-size:10px;color:var(--muted)">(비우면 제조일+'+shelf+'개월 자동)</span></label><input id="l_exp" type="date"></div></div>'+
+    '<div class="field"><label>입고수량(봉투)</label><input id="l_qty" type="number" value="'+escHtml(p.qty)+'"></div>'+
+    '<div class="field"><label>표준통관예정보고서번호</label><input id="l_customs" placeholder="예: 2305012600413130"></div>'+
+    '<div class="field"><label>수입면장번호</label><input id="l_decl" placeholder="예: 23992-26-501368M"></div>'+
+    '<div class="field"><label>GTIN (스캔 시 자동)</label><input id="l_gtin" placeholder="스캔 또는 직접입력"></div>'+
+    '<div id="l_warn" style="color:var(--amber);font-size:12px;min-height:14px"></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="l_cancel">취소</button><button class="btn" id="l_save">LOT 저장</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#l_cancel').addEventListener('click',()=>m.remove());
+
+  // 제조일 입력 시 유통기한 자동(비어있을 때만)
+  m.querySelector('#l_pdate').addEventListener('change',()=>{
+    const pd=m.querySelector('#l_pdate').value, ex=m.querySelector('#l_exp');
+    if(pd && !ex.value){ ex.value=addMonthsMinus1(pd, shelf); }
+  });
+
+  // 스캔 결과 채우기
+  m.querySelector('#l_scan').addEventListener('click',()=>{
+    openScanner((g)=>{
+      if(g.lot) m.querySelector('#l_lot').value=g.lot;
+      if(g.prodDate) m.querySelector('#l_pdate').value=g.prodDate;
+      if(g.expDate) m.querySelector('#l_exp').value=g.expDate;
+      else if(g.prodDate) m.querySelector('#l_exp').value=addMonthsMinus1(g.prodDate, shelf);
+      if(g.gtin) m.querySelector('#l_gtin').value=g.gtin;
+      // GTIN 제품 일치 확인
+      const warn=m.querySelector('#l_warn');
+      const known=(prod.gtins||[]).map(x=>String(x).replace(/^0+/,''));
+      const scanned=String(g.gtin||'').replace(/^0+/,'');
+      if(g.gtin && known.length && known.indexOf(scanned)<0) warn.textContent='⚠️ 스캔한 GTIN이 이 제품에 등록된 값과 다릅니다. 박스를 확인하세요.';
+      else warn.textContent='';
+      toast('스캔 완료 — 값이 채워졌습니다');
+    });
+  });
+
+  m.querySelector('#l_save').addEventListener('click',async()=>{
+    const lotNo=(m.querySelector('#l_lot').value||'').trim();
+    const prodDate=m.querySelector('#l_pdate').value||'';
+    let expiry=m.querySelector('#l_exp').value||'';
+    const qty=parseInt(m.querySelector('#l_qty').value||'0',10)||0;
+    if(!lotNo){ toast('LOT 번호를 입력하세요'); return; }
+    if(!prodDate){ toast('제조일자를 입력하세요'); return; }
+    if(qty<=0){ toast('입고수량을 입력하세요'); return; }
+    if(!expiry) expiry=addMonthsMinus1(prodDate, shelf);
+    const lot={
+      product:p.gmpProduct, productId:prod._id||'', model:prod.model||'',
+      gtin:(m.querySelector('#l_gtin').value||'').trim(),
+      lotNo, prodDate, expiry,
+      customsNo:(m.querySelector('#l_customs').value||'').trim(),
+      importDeclNo:(m.querySelector('#l_decl').value||'').trim(),
+      initialQty:qty, currentQty:qty,
+      srcInvId:p.srcInvId, opProduct:p.opProduct,
+      sterile:!!prod.sterile,
+      inspectInStatus:'pending',
+      createdAt:Date.now(), createdBy:currentUser.name
+    };
+    try{
+      await push(ref(db,'gmp_data/lots'), lot);
+      logAudit('등록','LOT 등록: '+p.gmpProduct+' / '+lotNo+' '+fmt(qty)+'개');
+      toast('LOT가 등록되었습니다'); m.remove();
+    }catch(e){ toast('저장 실패: '+e.message); }
+  });
+}
+
+/* ── 설정: 사용자관리 ── */
 function renderSettings(){
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">사용자 관리</div><button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
     '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>';
@@ -521,7 +624,7 @@ function openUserModal(row){
   const m=document.createElement('div'); m.className='modal-bg';
   m.innerHTML='<div class="modal"><h3>'+(isEdit?'사용자 수정':'사용자 추가')+'</h3>'+
     '<div class="field"><label>이름</label><input id="u_name" value="'+escHtml(isEdit?row.name:'')+'"></div>'+
-    '<div class="field"><label>이메일</label><input id="u_email" type="email" value="'+escHtml(isEdit?row.email:'')+'" '+(isEdit?'disabled style="background:#f3f4f6"':'')+'></div>'+
+    '<div class="field"><label>이메일</label><input id="u_email" type="email" value="'+escHtml(isEdit?row.email:'')+'" '+(isEdit?'disabled class="ro"':'')+'></div>'+
     '<div class="row2"><div class="field"><label>코드(비밀번호)</label><input id="u_code" value="'+escHtml(isEdit?row.code:'')+'"></div><div class="field"><label>권한</label><select id="u_role"><option value="admin"'+(isEdit&&row.role==='admin'?' selected':'')+'>관리자</option><option value="viewer"'+(isEdit&&row.role==='viewer'?' selected':'')+'>조회자</option></select></div></div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="u_cancel">취소</button><button class="btn" id="u_save">저장</button></div></div>';
   document.body.appendChild(m);
@@ -548,9 +651,7 @@ async function delUser(row){
   if(!confirm('“'+row.name+'” 사용자를 삭제할까요? (로그인 불가가 됩니다)')) return;
   const key=row._key;
   try{
-    await set(ref(db,'gmp_admins/'+key), null);
-    await set(ref(db,'admin_emails/'+key), null);
-    await set(ref(db,'viewer_emails/'+key), null);
+    await set(ref(db,'gmp_admins/'+key), null); await set(ref(db,'admin_emails/'+key), null); await set(ref(db,'viewer_emails/'+key), null);
     logAudit('삭제','사용자 삭제: '+row.name); toast('삭제되었습니다');
   }catch(e){ toast('삭제 실패: '+e.message); }
 }
