@@ -8,14 +8,13 @@
   :root{
     --green:#15a36a; --green-d:#0f7f52; --green-l:#e8f6ef;
     --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#f6f8f7; --card:#ffffff;
-    --red:#dc2626; --amber:#d97706;
+    --red:#dc2626; --amber:#d97706; --blue:#2563eb;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Malgun Gothic","맑은 고딕",sans-serif;color:var(--ink);background:var(--bg);font-size:14px}
   button{font-family:inherit;cursor:pointer}
   .hidden{display:none!important}
 
-  /* 로그인 */
   #loginView{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
   .login-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:34px 30px;width:100%;max-width:380px;box-shadow:0 8px 30px rgba(0,0,0,.06)}
   .login-card h1{font-size:18px;margin:0 0 4px;color:var(--green-d)}
@@ -35,7 +34,6 @@
   .btn-sm{padding:6px 11px;font-size:12px;border-radius:7px}
   .err{color:var(--red);font-size:12px;margin-top:10px;min-height:16px}
 
-  /* 메인 레이아웃 */
   #mainView{display:flex;min-height:100vh}
   .side{width:230px;background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
   .brand{padding:18px 18px 14px;border-bottom:1px solid var(--line)}
@@ -69,10 +67,16 @@
   .pill{display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600}
   .pill.green{background:var(--green-l);color:var(--green-d)}
   .pill.amber{background:#fef3c7;color:var(--amber)}
+  .pill.blue{background:#e0edff;color:var(--blue)}
   .empty{color:var(--muted);text-align:center;padding:30px 10px}
   .actions-cell{display:flex;gap:6px;justify-content:flex-end}
 
-  /* 모달 */
+  .banner{border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+  .banner.ok{background:var(--green-l);color:var(--green-d)}
+  .banner.warn{background:#fef3c7;color:var(--amber)}
+  .banner.bad{background:#fee2e2;color:var(--red)}
+  .banner b{font-weight:700}
+
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
   .modal{background:#fff;border-radius:14px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:22px}
   .modal h3{margin:0 0 16px;font-size:16px}
@@ -83,7 +87,6 @@
   .chk{display:flex;align-items:center;gap:8px}
   .chk input{width:auto}
 
-  /* 토스트 */
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;z-index:80;pointer-events:none}
   #toast.show{opacity:1}
 
@@ -97,31 +100,20 @@
 </head>
 <body>
 
-<!-- ================= 로그인 화면 ================= -->
 <div id="loginView">
   <div class="login-card">
     <h1>AMT GMP 품질관리 시스템</h1>
     <div class="sub">이메일과 코드로 로그인하세요.</div>
-    <div class="field">
-      <label>이메일</label>
-      <input id="loginEmail" type="email" autocomplete="username" placeholder="name@gmail.com">
-    </div>
-    <div class="field">
-      <label>코드</label>
-      <input id="loginCode" type="password" autocomplete="current-password" placeholder="코드 입력">
-    </div>
+    <div class="field"><label>이메일</label><input id="loginEmail" type="email" autocomplete="username" placeholder="name@gmail.com"></div>
+    <div class="field"><label>코드</label><input id="loginCode" type="password" autocomplete="current-password" placeholder="코드 입력"></div>
     <button id="loginBtn" class="btn btn-full">로그인</button>
     <div id="loginErr" class="err"></div>
   </div>
 </div>
 
-<!-- ================= 메인 화면 ================= -->
 <div id="mainView" class="hidden">
   <aside class="side" id="side">
-    <div class="brand">
-      <span class="logo">GMP</span>
-      <span class="name">AMT GMP<small>품질관리 시스템</small></span>
-    </div>
+    <div class="brand"><span class="logo">GMP</span><span class="name">AMT GMP<small>품질관리 시스템</small></span></div>
     <nav class="menu" id="menu"></nav>
     <div class="side-foot">
       <div class="u" id="sideUser">-</div>
@@ -131,10 +123,7 @@
   </aside>
   <div class="content">
     <div class="topbar">
-      <div style="display:flex;align-items:center">
-        <button class="menu-toggle" id="menuToggle">☰</button>
-        <h2 id="pageTitle">대시보드</h2>
-      </div>
+      <div style="display:flex;align-items:center"><button class="menu-toggle" id="menuToggle">☰</button><h2 id="pageTitle">대시보드</h2></div>
       <div class="right"><span class="pill green">GMP 전자기록</span><span id="topUser"></span></div>
     </div>
     <div class="page" id="page"></div>
@@ -150,7 +139,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getDatabase, ref, get, set, update, push, onValue, off }
   from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-/* ── Firebase 설정 (amt-gmp / amtkorea 계정). API키 노출은 보안규칙으로 보호되므로 정상 ── */
+/* ── GMP DB (amt-gmp / amtkorea). API키 노출은 보안규칙으로 보호되므로 정상 ── */
 const firebaseConfig = {
   apiKey: "AIzaSyBy3A5kZU-XdzBUIpdLNTrFJnrlWcYEtt8",
   authDomain: "amt-gmp.firebaseapp.com",
@@ -164,6 +153,22 @@ const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getDatabase(app);
 
+/* ── 운영앱 DB (amt-ky / amedtech) : 읽기 전용 연결 (수입·내부거래 가져오기) ── */
+const amtKyConfig = {
+  apiKey: "AIzaSyC2jfTHmaguOS9e_ddTvicUZJcvXzQ7EKI",
+  authDomain: "amt-ky.firebaseapp.com",
+  databaseURL: "https://amt-ky-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "amt-ky",
+  storageBucket: "amt-ky.firebasestorage.app",
+  messagingSenderId: "1082363760608",
+  appId: "1:1082363760608:web:ac27fa51dc23cb603ee585"
+};
+const appAmt  = initializeApp(amtKyConfig, 'amt');
+const authAmt = getAuth(appAmt);
+const dbAmt   = getDatabase(appAmt);
+// 운영앱과 동일한 더미 패스워드 패턴
+function amtKyPw(email){ return 'amtky2026_' + String(email||'').toLowerCase().replace(/[^a-z0-9]/g,'_') + '_x'; }
+
 const SUPER_EMAIL = "kyunghoyou@gmail.com";
 
 /* ── 공통 헬퍼 ── */
@@ -174,15 +179,25 @@ function escHtml(s){
 }
 function emailKey(email){ return String(email||'').trim().toLowerCase().replace(/\./g,','); }
 function $(id){ return document.getElementById(id); }
+function fmt(n){ return Number(n||0).toLocaleString('ko-KR'); }
 function toast(msg){
   const t=$('toast'); t.textContent=msg; t.classList.add('show');
   clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('show'),2200);
 }
 
-let currentUser = null;          // {email, name, role}
+let currentUser = null;
 let loggingIn   = false;
 let productsUnsub = null;
 let usersUnsub = null;
+
+/* ── 운영앱 제품명 → GMP 제품명 매핑 (MEDIAS는 T/WTP 분할) ── */
+function gmpProductsFor(opProduct){
+  const p = String(opProduct||'').trim().toUpperCase();
+  if(p==='MEDIAS') return ['MEDIAS T','MEDIAS'];   // 한 봉투 = TP + WTP
+  if(p==='JUC')    return ['JUC Spray Dressing'];
+  if(p==='DELL')   return ['DELL'];
+  return [opProduct];
+}
 
 /* ── 감사기록 ── */
 async function logAudit(action, detail){
@@ -197,21 +212,15 @@ async function logAudit(action, detail){
 
 /* ── 로그인 ── */
 async function ensureAuth(email){
-  const pw = 'gmp!' + email;           // 더미 비밀번호(실제 검증은 DB 코드). 결정적이라 같은 계정 동일.
-  try{
-    await signInWithEmailAndPassword(auth, email, pw);
-  }catch(e){
-    await createUserWithEmailAndPassword(auth, email, pw); // 최초 로그인 → 계정 생성
-  }
+  const pw = 'gmp!' + email;
+  try{ await signInWithEmailAndPassword(auth, email, pw); }
+  catch(e){ await createUserWithEmailAndPassword(auth, email, pw); }
 }
-
 async function doLogin(){
   const email = ($('loginEmail').value||'').trim().toLowerCase();
   const code  = ($('loginCode').value||'').trim();
-  const errEl = $('loginErr');
-  errEl.textContent='';
+  const errEl = $('loginErr'); errEl.textContent='';
   if(!email || !code){ errEl.textContent='이메일과 코드를 모두 입력하세요.'; return; }
-
   const btn=$('loginBtn'); btn.disabled=true; btn.textContent='확인 중...';
   loggingIn=true;
   try{
@@ -219,50 +228,34 @@ async function doLogin(){
     const key = emailKey(email);
     const snap = await get(ref(db,'gmp_admins/'+key));
     let rec = snap.val();
-
     if(!rec){
       if(email === SUPER_EMAIL){
-        // 최초 총괄 부트스트랩
         rec = { email, name:'유경호', code, role:'super', createdAt: Date.now() };
         await set(ref(db,'gmp_admins/'+key), rec);
-      }else{
-        await signOut(auth);
-        throw new Error('등록되지 않은 사용자입니다. 총괄관리자에게 등록을 요청하세요.');
-      }
+      }else{ await signOut(auth); throw new Error('등록되지 않은 사용자입니다. 총괄관리자에게 등록을 요청하세요.'); }
     }
-    if(String(rec.code) !== String(code)){
-      await signOut(auth);
-      throw new Error('코드가 일치하지 않습니다.');
-    }
-
+    if(String(rec.code) !== String(code)){ await signOut(auth); throw new Error('코드가 일치하지 않습니다.'); }
     currentUser = { email, name: rec.name||email, role: rec.role||'viewer' };
     await cleanupPlaceholder();
     logAudit('로그인','사용자 '+currentUser.name+' 로그인');
     renderMain();
-  }catch(e){
-    errEl.textContent = e.message || '로그인에 실패했습니다.';
-  }finally{
-    loggingIn=false; btn.disabled=false; btn.textContent='로그인';
-  }
+  }catch(e){ errEl.textContent = e.message || '로그인에 실패했습니다.'; }
+  finally{ loggingIn=false; btn.disabled=false; btn.textContent='로그인'; }
 }
-
-// 초기데이터에 넣어둔 임시 placeholder 자동 정리(총괄만)
 async function cleanupPlaceholder(){
   if(currentUser && currentUser.role==='super'){
     try{ await set(ref(db,'viewer_emails/placeholder@example,com'), null); }catch(_){}
   }
 }
-
 async function doLogout(){
   logAudit('로그아웃','사용자 '+(currentUser?currentUser.name:'')+' 로그아웃');
   if(productsUnsub){ productsUnsub(); productsUnsub=null; }
   if(usersUnsub){ usersUnsub(); usersUnsub=null; }
   currentUser=null;
+  try{ await signOut(authAmt); }catch(_){}
   await signOut(auth);
   showLogin();
 }
-
-/* ── 화면 전환 ── */
 function showLogin(){
   $('mainView').classList.add('hidden');
   $('loginView').classList.remove('hidden');
@@ -272,7 +265,7 @@ function showLogin(){
 const MENUS = [
   {id:'dash',   label:'대시보드',        ready:false},
   {id:'prod',   label:'제품관리',        ready:true},
-  {id:'lot',    label:'LOT 관리',        ready:false},
+  {id:'lot',    label:'LOT 관리 · 입고',  ready:true},
   {id:'ledger', label:'입출고관리대장',  ready:false},
   {id:'insIn',  label:'입고검사성적서',  ready:false},
   {id:'insOut', label:'출고검사성적서',  ready:false},
@@ -285,13 +278,10 @@ const MENUS = [
 function renderMain(){
   $('loginView').classList.add('hidden');
   $('mainView').classList.remove('hidden');
-
   const roleLabel = {super:'총괄관리자', admin:'관리자', viewer:'조회자'}[currentUser.role]||currentUser.role;
   $('sideUser').textContent = currentUser.name;
   $('sideRole').innerHTML = '<span class="badge '+(currentUser.role==='viewer'?'gray':'')+'">'+escHtml(roleLabel)+'</span>';
   $('topUser').textContent = currentUser.name+' ('+roleLabel+')';
-
-  // 메뉴
   const menu=$('menu'); menu.innerHTML='';
   MENUS.forEach(m=>{
     if(m.superOnly && currentUser.role!=='super') return;
@@ -301,96 +291,65 @@ function renderMain(){
     a.addEventListener('click',()=>{ navTo(m.id); if(window.innerWidth<=760) $('side').classList.remove('open'); });
     menu.appendChild(a);
   });
-
-  navTo('prod'); // 1단계 기본 화면
+  navTo('prod');
 }
-
 function navTo(id){
   document.querySelectorAll('.menu-link').forEach(el=>el.classList.toggle('active', el.dataset.id===id));
   const m = MENUS.find(x=>x.id===id);
   $('pageTitle').textContent = m? m.label : '';
   if(productsUnsub){ productsUnsub(); productsUnsub=null; }
   if(usersUnsub){ usersUnsub(); usersUnsub=null; }
-
-  if(id==='prod')      renderProducts();
+  if(id==='prod')          renderProducts();
+  else if(id==='lot')      renderLot();
   else if(id==='settings') renderSettings();
   else renderPlaceholder(m?m.label:'');
 }
-
 function renderPlaceholder(label){
-  $('page').innerHTML =
-    '<div class="card"><div class="empty">'+escHtml(label)+' 메뉴는 다음 단계에서 추가됩니다.<br><small>현재 1단계: 로그인 · 제품관리 · 사용자관리</small></div></div>';
+  $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(label)+' 메뉴는 다음 단계에서 추가됩니다.</div></div>';
 }
 
 /* ── 제품관리 ── */
 const canWrite = ()=> currentUser && (currentUser.role==='super'||currentUser.role==='admin');
-
 function renderProducts(){
   const writeBtns = canWrite()
-    ? '<div style="display:flex;gap:8px"><button id="seedBtn" class="btn btn-ghost btn-sm">기본 4제품 등록</button><button id="addProdBtn" class="btn btn-sm">+ 제품 추가</button></div>'
-    : '';
-  $('page').innerHTML =
-    '<div class="card"><div class="card-h"><div class="t">제품 목록</div>'+writeBtns+'</div>'+
-    '<div id="prodTable"><div class="empty">불러오는 중...</div></div></div>';
-
-  if(canWrite()){
-    $('addProdBtn').addEventListener('click',()=>openProdModal(null));
-    $('seedBtn').addEventListener('click',seedProducts);
-  }
-
+    ? '<div style="display:flex;gap:8px"><button id="seedBtn" class="btn btn-ghost btn-sm">기본 4제품 등록</button><button id="addProdBtn" class="btn btn-sm">+ 제품 추가</button></div>' : '';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">제품 목록</div>'+writeBtns+'</div><div id="prodTable"><div class="empty">불러오는 중...</div></div></div>';
+  if(canWrite()){ $('addProdBtn').addEventListener('click',()=>openProdModal(null)); $('seedBtn').addEventListener('click',seedProducts); }
   const r = ref(db,'gmp_data/products');
   const cb = onValue(r,(snap)=>{
     const val = snap.val()||{};
     const rows = Object.keys(val).map(k=>Object.assign({_id:k}, val[k]));
     rows.sort((a,b)=>String(a.name).localeCompare(String(b.name),'ko'));
     drawProdTable(rows);
-  },(err)=>{ $('prodTable').innerHTML='<div class="empty">읽기 권한이 없거나 오류가 발생했습니다.<br><small>'+escHtml(err.message)+'</small></div>'; });
+  },(err)=>{ $('prodTable').innerHTML='<div class="empty">읽기 오류: '+escHtml(err.message)+'</div>'; });
   productsUnsub = ()=>off(r,'value',cb);
 }
-
 function drawProdTable(rows){
-  if(!rows.length){ $('prodTable').innerHTML='<div class="empty">등록된 제품이 없습니다.'+(canWrite()?' 위의 “기본 4제품 등록” 또는 “+ 제품 추가”로 시작하세요.':'')+'</div>'; return; }
+  if(!rows.length){ $('prodTable').innerHTML='<div class="empty">등록된 제품이 없습니다.'+(canWrite()?' 위의 “기본 4제품 등록”으로 시작하세요.':'')+'</div>'; return; }
   let html='<table><thead><tr><th>제품명</th><th>모델명</th><th>제조사</th><th>멸균</th><th>유효기간</th><th>GTIN</th>'+(canWrite()?'<th></th>':'')+'</tr></thead><tbody>';
   rows.forEach(p=>{
     const ster = p.sterile? '<span class="pill amber">멸균</span>' : '<span class="pill green">비멸균</span>';
     const gtins = (p.gtins&&p.gtins.length)? escHtml(p.gtins.join(', ')) : '<span style="color:var(--muted)">-</span>';
-    html+='<tr>'+
-      '<td><b>'+escHtml(p.name)+'</b></td>'+
-      '<td>'+escHtml(p.model)+'</td>'+
-      '<td>'+escHtml(p.maker)+'</td>'+
-      '<td>'+ster+'</td>'+
-      '<td>'+escHtml((p.shelfMonths||36))+'개월</td>'+
-      '<td>'+gtins+'</td>';
-    if(canWrite()){
-      html+='<td><div class="actions-cell">'+
-        '<button class="btn btn-ghost btn-sm" data-edit="'+escHtml(p._id)+'">수정</button>'+
-        '<button class="btn btn-danger btn-sm" data-del="'+escHtml(p._id)+'">삭제</button></div></td>';
-    }
+    html+='<tr><td><b>'+escHtml(p.name)+'</b></td><td>'+escHtml(p.model)+'</td><td>'+escHtml(p.maker)+'</td><td>'+ster+'</td><td>'+escHtml((p.shelfMonths||36))+'개월</td><td>'+gtins+'</td>';
+    if(canWrite()) html+='<td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-edit="'+escHtml(p._id)+'">수정</button><button class="btn btn-danger btn-sm" data-del="'+escHtml(p._id)+'">삭제</button></div></td>';
     html+='</tr>';
   });
   html+='</tbody></table>';
   const wrap=$('prodTable'); wrap.innerHTML=html;
   if(canWrite()){
-    wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>{
-      const id=b.getAttribute('data-edit'); const row=rows.find(x=>x._id===id); openProdModal(row);
-    }));
-    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
-      const id=b.getAttribute('data-del'); const row=rows.find(x=>x._id===id); delProduct(row);
-    }));
+    wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>{ const row=rows.find(x=>x._id===b.getAttribute('data-edit')); openProdModal(row); }));
+    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{ const row=rows.find(x=>x._id===b.getAttribute('data-del')); delProduct(row); }));
   }
 }
-
 function openProdModal(row){
   const isEdit=!!row;
   const m=document.createElement('div'); m.className='modal-bg';
-  m.innerHTML=
-    '<div class="modal"><h3>'+(isEdit?'제품 수정':'제품 추가')+'</h3>'+
+  m.innerHTML='<div class="modal"><h3>'+(isEdit?'제품 수정':'제품 추가')+'</h3>'+
     '<div class="field"><label>제품명 (GMP 실제명)</label><input id="f_name" value="'+escHtml(isEdit?row.name:'')+'"></div>'+
-    '<div class="row2"><div class="field"><label>모델명</label><input id="f_model" value="'+escHtml(isEdit?row.model:'')+'"></div>'+
-    '<div class="field"><label>유효기간(개월)</label><input id="f_shelf" type="number" value="'+escHtml(isEdit?(row.shelfMonths||36):36)+'"></div></div>'+
+    '<div class="row2"><div class="field"><label>모델명</label><input id="f_model" value="'+escHtml(isEdit?row.model:'')+'"></div><div class="field"><label>유효기간(개월)</label><input id="f_shelf" type="number" value="'+escHtml(isEdit?(row.shelfMonths||36):36)+'"></div></div>'+
     '<div class="field"><label>제조사</label><input id="f_maker" value="'+escHtml(isEdit?row.maker:'')+'"></div>'+
     '<div class="field"><label>수입업체</label><input id="f_importer" value="'+escHtml(isEdit?(row.importer||'AMT Korea'):'AMT Korea')+'"></div>'+
-    '<div class="field"><label>GTIN (여러 개면 쉼표로 구분)</label><input id="f_gtins" value="'+escHtml(isEdit&&row.gtins?row.gtins.join(', '):'')+'" placeholder="예: 08809885420048"></div>'+
+    '<div class="field"><label>GTIN (여러 개면 쉼표로 구분, 앞의 0 포함)</label><input id="f_gtins" value="'+escHtml(isEdit&&row.gtins?row.gtins.join(', '):'')+'" placeholder="예: 06922278500034"></div>'+
     '<div class="field"><label class="chk"><input id="f_sterile" type="checkbox" '+(isEdit&&row.sterile?'checked':'')+'> 멸균제품 (멸균성적서 필요)</label></div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="f_cancel">취소</button><button class="btn" id="f_save">저장</button></div></div>';
   document.body.appendChild(m);
@@ -400,47 +359,28 @@ function openProdModal(row){
     const name=(m.querySelector('#f_name').value||'').trim();
     if(!name){ toast('제품명을 입력하세요'); return; }
     const gtins=(m.querySelector('#f_gtins').value||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
-    const data={
-      name,
-      model:(m.querySelector('#f_model').value||'').trim(),
-      maker:(m.querySelector('#f_maker').value||'').trim(),
-      importer:(m.querySelector('#f_importer').value||'AMT Korea').trim(),
-      shelfMonths:parseInt(m.querySelector('#f_shelf').value||'36',10)||36,
-      gtins,
-      sterile:m.querySelector('#f_sterile').checked,
-      updatedAt:Date.now()
-    };
+    const data={ name, model:(m.querySelector('#f_model').value||'').trim(), maker:(m.querySelector('#f_maker').value||'').trim(),
+      importer:(m.querySelector('#f_importer').value||'AMT Korea').trim(), shelfMonths:parseInt(m.querySelector('#f_shelf').value||'36',10)||36,
+      gtins, sterile:m.querySelector('#f_sterile').checked, updatedAt:Date.now() };
     try{
-      if(isEdit){
-        await update(ref(db,'gmp_data/products/'+row._id), data);
-        logAudit('수정','제품 수정: '+name);
-      }else{
-        data.createdAt=Date.now();
-        await push(ref(db,'gmp_data/products'), data);
-        logAudit('등록','제품 등록: '+name);
-      }
+      if(isEdit){ await update(ref(db,'gmp_data/products/'+row._id), data); logAudit('수정','제품 수정: '+name); }
+      else{ data.createdAt=Date.now(); await push(ref(db,'gmp_data/products'), data); logAudit('등록','제품 등록: '+name); }
       toast('저장되었습니다'); m.remove();
     }catch(e){ toast('저장 실패: '+e.message); }
   });
 }
-
 async function delProduct(row){
   if(!row) return;
   if(!confirm('“'+row.name+'” 제품을 삭제할까요?')) return;
-  try{
-    await set(ref(db,'gmp_data/products/'+row._id), null);
-    logAudit('삭제','제품 삭제: '+row.name);
-    toast('삭제되었습니다');
-  }catch(e){ toast('삭제 실패: '+e.message); }
+  try{ await set(ref(db,'gmp_data/products/'+row._id), null); logAudit('삭제','제품 삭제: '+row.name); toast('삭제되었습니다'); }
+  catch(e){ toast('삭제 실패: '+e.message); }
 }
-
 const SEED_PRODUCTS=[
-  {name:'JUC Spray Dressing', model:'JUC10', gtins:['10692227850034'], maker:'NMS Technologies Co.,Ltd.', importer:'AMT Korea', sterile:false, shelfMonths:36},
-  {name:'DELL',     model:'DELL1', gtins:[], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36},
+  {name:'JUC Spray Dressing', model:'JUC10', gtins:['06922278500034','10692227850034'], maker:'NMS Technologies Co.,Ltd.', importer:'AMT Korea', sterile:false, shelfMonths:36},
+  {name:'DELL',     model:'DELL1', gtins:['08809885420055'], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36},
   {name:'MEDIAS T', model:'TP',    gtins:['08809885420048'], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36},
-  {name:'MEDIAS',   model:'WTP',   gtins:[], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36}
+  {name:'MEDIAS',   model:'WTP',   gtins:['08809885420031'], maker:'SHAOXING XIYAN TRADING CO.,LTD', importer:'AMT Korea', sterile:true, shelfMonths:36}
 ];
-
 async function seedProducts(){
   const snap = await get(ref(db,'gmp_data/products'));
   const exist = snap.val()||{};
@@ -449,23 +389,110 @@ async function seedProducts(){
   if(!toAdd.length){ toast('이미 4제품이 모두 등록되어 있습니다'); return; }
   if(!confirm(toAdd.length+'개 제품을 등록할까요? ('+toAdd.map(p=>p.name).join(', ')+')')) return;
   try{
-    for(const p of toAdd){
-      await push(ref(db,'gmp_data/products'), Object.assign({createdAt:Date.now(),updatedAt:Date.now()}, p));
-    }
-    logAudit('등록','기본 제품 '+toAdd.length+'개 일괄 등록');
-    toast(toAdd.length+'개 등록 완료');
+    for(const p of toAdd){ await push(ref(db,'gmp_data/products'), Object.assign({createdAt:Date.now(),updatedAt:Date.now()}, p)); }
+    logAudit('등록','기본 제품 '+toAdd.length+'개 일괄 등록'); toast(toAdd.length+'개 등록 완료');
   }catch(e){ toast('등록 실패: '+e.message); }
+}
+
+/* ── LOT 관리 · 입고 (2-A: 운영앱 수입 자동 입고대기) ── */
+let amtKy = { status:'idle', invLogs:[], internalTrades:[], err:'' };
+
+async function connectAmtKy(){
+  if(!currentUser){ amtKy={status:'noauth',invLogs:[],internalTrades:[],err:''}; return; }
+  try{
+    await signInWithEmailAndPassword(authAmt, currentUser.email, amtKyPw(currentUser.email));
+    const snap = await get(ref(dbAmt,'amt_data'));
+    const data = snap.val()||{};
+    let inv = data.invLogs||[];          if(!Array.isArray(inv)) inv = Object.values(inv);
+    let it  = data.internalTrades||[];   if(!Array.isArray(it))  it  = Object.values(it);
+    amtKy = { status:'ok', invLogs:inv.filter(Boolean), internalTrades:it.filter(Boolean), err:'' };
+  }catch(e){
+    const code = e.code||'';
+    if(code.includes('invalid-credential')||code.includes('wrong-password')||code.includes('user-not-found')){
+      amtKy = { status:'noaccess', invLogs:[], internalTrades:[], err:'운영앱 계정 권한 없음' };
+    }else{
+      amtKy = { status:'error', invLogs:[], internalTrades:[], err:(e.message||String(e)) };
+    }
+  }
+}
+
+// 운영앱 invLogs 중 '수입' 건만 추출
+function importLogs(){
+  return amtKy.invLogs.filter(i =>
+    (i.company||'AMT')==='AMT' &&
+    i.type==='adjust' &&
+    Number(i.qty)>0 &&
+    String(i.memo||'').includes('수입')
+  );
+}
+
+async function renderLot(){
+  $('page').innerHTML='<div class="card"><div class="empty">운영앱(AMT) 연결 중...</div></div>';
+  await connectAmtKy();
+
+  // 연결 상태 배너
+  let banner='';
+  if(amtKy.status==='ok'){
+    banner='<div class="banner ok">✅ 운영앱(AMT) 연결됨 · 수입 기록 <b>'+importLogs().length+'</b>건 확인</div>';
+  }else if(amtKy.status==='noaccess'){
+    banner='<div class="banner warn">⚠️ 운영앱 접근 권한이 없습니다. 수입 자동연동은 <b>운영앱 관리자</b>(유경호 등) 계정으로만 가능합니다. (LOT 목록은 정상 표시됩니다)</div>';
+  }else{
+    banner='<div class="banner bad">❌ 운영앱 연결 실패: '+escHtml(amtKy.err)+'</div>';
+  }
+
+  $('page').innerHTML = banner +
+    '<div class="card"><div class="card-h"><div class="t">입고 대기 (운영앱 “수입” 자동연동)</div></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 재고조정에서 “수입”으로 입력된 건입니다. MEDIAS 수입은 MEDIAS T·MEDIAS 두 건으로 나뉩니다. (다음 단계에서 여기서 바로 LOT 등록·GS1 스캔)</div>'+
+    '<div id="pendingTable"></div></div>'+
+    '<div class="card"><div class="card-h"><div class="t">LOT 목록</div></div><div id="lotTable"></div></div>';
+
+  drawPending();
+  drawLotList();
+}
+
+function drawPending(){
+  const imps = importLogs();
+  if(amtKy.status!=='ok'){ $('pendingTable').innerHTML='<div class="empty">운영앱 연결 시 수입 건이 표시됩니다.</div>'; return; }
+  if(!imps.length){ $('pendingTable').innerHTML='<div class="empty">대기 중인 수입 건이 없습니다.</div>'; return; }
+  // 최신순
+  imps.sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  let html='<table><thead><tr><th>수입일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>메모</th><th>상태</th></tr></thead><tbody>';
+  imps.forEach(i=>{
+    const gmps = gmpProductsFor(i.product);
+    gmps.forEach((gp,idx)=>{
+      html+='<tr>'+
+        '<td>'+escHtml(i.date)+'</td>'+
+        '<td>'+(idx===0?escHtml(i.product):'<span style="color:var(--muted)">↳ 분할</span>')+'</td>'+
+        '<td><b>'+escHtml(gp)+'</b></td>'+
+        '<td>'+fmt(i.qty)+'</td>'+
+        '<td>'+escHtml(i.memo||'')+'</td>'+
+        '<td><span class="pill amber">LOT 등록 대기</span></td>'+
+        '</tr>';
+    });
+  });
+  html+='</tbody></table>';
+  $('pendingTable').innerHTML=html;
+}
+
+function drawLotList(){
+  const r=ref(db,'gmp_data/lots');
+  onValue(r,(snap)=>{
+    const val=snap.val()||{};
+    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    if(!rows.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다. (다음 단계에서 입고대기 → LOT 등록 기능 추가)</div>'; return; }
+    rows.sort((a,b)=>String(b.createdAt||0)-Number(a.createdAt||0));
+    let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>초기재고</th><th>현재재고</th></tr></thead><tbody>';
+    rows.forEach(l=>{ html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td></tr>'; });
+    html+='</tbody></table>';
+    $('lotTable').innerHTML=html;
+  },(err)=>{ $('lotTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
 }
 
 /* ── 설정: 사용자관리 (총괄 전용) ── */
 function renderSettings(){
-  $('page').innerHTML=
-    '<div class="card"><div class="card-h"><div class="t">사용자 관리</div>'+
-    '<button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div>'+
-    '<div id="userTable"><div class="empty">불러오는 중...</div></div></div>';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">사용자 관리</div><button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>';
   $('addUserBtn').addEventListener('click',()=>openUserModal());
-
   const r=ref(db,'gmp_admins');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
@@ -475,40 +502,27 @@ function renderSettings(){
   },(err)=>{ $('userTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
 }
-
 function drawUserTable(rows){
   if(!rows.length){ $('userTable').innerHTML='<div class="empty">등록된 사용자가 없습니다.</div>'; return; }
   let html='<table><thead><tr><th>이름</th><th>이메일</th><th>권한</th><th></th></tr></thead><tbody>';
   rows.forEach(u=>{
     const roleLabel={super:'총괄관리자',admin:'관리자',viewer:'조회자'}[u.role]||u.role;
     const isSelf = currentUser && u.email===currentUser.email;
-    html+='<tr><td><b>'+escHtml(u.name)+'</b></td><td>'+escHtml(u.email)+'</td>'+
-      '<td><span class="pill '+(u.role==='viewer'?'green':'amber')+'">'+escHtml(roleLabel)+'</span></td>'+
-      '<td><div class="actions-cell">'+
-      (u.role==='super'||isSelf ? '<span style="color:var(--muted);font-size:12px">—</span>'
-        : '<button class="btn btn-ghost btn-sm" data-uedit="'+escHtml(u._key)+'">수정</button>'+
-          '<button class="btn btn-danger btn-sm" data-udel="'+escHtml(u._key)+'">삭제</button>')+
-      '</div></td></tr>';
+    html+='<tr><td><b>'+escHtml(u.name)+'</b></td><td>'+escHtml(u.email)+'</td><td><span class="pill '+(u.role==='viewer'?'green':'amber')+'">'+escHtml(roleLabel)+'</span></td>'+
+      '<td><div class="actions-cell">'+(u.role==='super'||isSelf ? '<span style="color:var(--muted);font-size:12px">—</span>' : '<button class="btn btn-ghost btn-sm" data-uedit="'+escHtml(u._key)+'">수정</button><button class="btn btn-danger btn-sm" data-udel="'+escHtml(u._key)+'">삭제</button>')+'</div></td></tr>';
   });
   html+='</tbody></table>';
   const wrap=$('userTable'); wrap.innerHTML=html;
-  wrap.querySelectorAll('[data-uedit]').forEach(b=>b.addEventListener('click',()=>{
-    const k=b.getAttribute('data-uedit'); openUserModal(rows.find(x=>x._key===k));
-  }));
-  wrap.querySelectorAll('[data-udel]').forEach(b=>b.addEventListener('click',()=>{
-    const k=b.getAttribute('data-udel'); delUser(rows.find(x=>x._key===k));
-  }));
+  wrap.querySelectorAll('[data-uedit]').forEach(b=>b.addEventListener('click',()=>openUserModal(rows.find(x=>x._key===b.getAttribute('data-uedit')))));
+  wrap.querySelectorAll('[data-udel]').forEach(b=>b.addEventListener('click',()=>delUser(rows.find(x=>x._key===b.getAttribute('data-udel')))));
 }
-
 function openUserModal(row){
   const isEdit=!!row;
   const m=document.createElement('div'); m.className='modal-bg';
-  m.innerHTML=
-    '<div class="modal"><h3>'+(isEdit?'사용자 수정':'사용자 추가')+'</h3>'+
+  m.innerHTML='<div class="modal"><h3>'+(isEdit?'사용자 수정':'사용자 추가')+'</h3>'+
     '<div class="field"><label>이름</label><input id="u_name" value="'+escHtml(isEdit?row.name:'')+'"></div>'+
     '<div class="field"><label>이메일</label><input id="u_email" type="email" value="'+escHtml(isEdit?row.email:'')+'" '+(isEdit?'disabled style="background:#f3f4f6"':'')+'></div>'+
-    '<div class="row2"><div class="field"><label>코드(비밀번호)</label><input id="u_code" value="'+escHtml(isEdit?row.code:'')+'"></div>'+
-    '<div class="field"><label>권한</label><select id="u_role"><option value="admin"'+(isEdit&&row.role==='admin'?' selected':'')+'>관리자</option><option value="viewer"'+(isEdit&&row.role==='viewer'?' selected':'')+'>조회자</option></select></div></div>'+
+    '<div class="row2"><div class="field"><label>코드(비밀번호)</label><input id="u_code" value="'+escHtml(isEdit?row.code:'')+'"></div><div class="field"><label>권한</label><select id="u_role"><option value="admin"'+(isEdit&&row.role==='admin'?' selected':'')+'>관리자</option><option value="viewer"'+(isEdit&&row.role==='viewer'?' selected':'')+'>조회자</option></select></div></div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="u_cancel">취소</button><button class="btn" id="u_save">저장</button></div></div>';
   document.body.appendChild(m);
   m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
@@ -522,7 +536,6 @@ function openUserModal(row){
     const key=emailKey(email);
     try{
       await set(ref(db,'gmp_admins/'+key), {email, name, code, role, updatedAt:Date.now()});
-      // 화이트리스트 갱신: 권한에 맞는 쪽에 등록, 반대쪽 제거
       if(role==='admin'){ await set(ref(db,'admin_emails/'+key),true); await set(ref(db,'viewer_emails/'+key),null); }
       else{ await set(ref(db,'viewer_emails/'+key),true); await set(ref(db,'admin_emails/'+key),null); }
       logAudit(isEdit?'수정':'등록','사용자 '+(isEdit?'수정':'등록')+': '+name+' ('+role+')');
@@ -530,7 +543,6 @@ function openUserModal(row){
     }catch(e){ toast('저장 실패: '+e.message); }
   });
 }
-
 async function delUser(row){
   if(!row) return;
   if(!confirm('“'+row.name+'” 사용자를 삭제할까요? (로그인 불가가 됩니다)')) return;
@@ -539,8 +551,7 @@ async function delUser(row){
     await set(ref(db,'gmp_admins/'+key), null);
     await set(ref(db,'admin_emails/'+key), null);
     await set(ref(db,'viewer_emails/'+key), null);
-    logAudit('삭제','사용자 삭제: '+row.name);
-    toast('삭제되었습니다');
+    logAudit('삭제','사용자 삭제: '+row.name); toast('삭제되었습니다');
   }catch(e){ toast('삭제 실패: '+e.message); }
 }
 
@@ -560,9 +571,7 @@ onAuthStateChanged(auth, async (user)=>{
       if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); }
       else { await signOut(auth); showLogin(); }
     }catch(e){ showLogin(); }
-  }else if(!user){
-    currentUser=null; showLogin();
-  }
+  }else if(!user){ currentUser=null; showLogin(); }
 });
 </script>
 </body>
