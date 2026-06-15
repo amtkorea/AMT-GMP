@@ -464,23 +464,38 @@ function drawLotList(lots){
 
 /* ── GS1 DataMatrix 파서 (괄호형식 + FNC1 raw 둘 다 지원) ── */
 function parseGs1(raw){
-  let s=String(raw||'');
+  const original=String(raw||'');
+  let s=original;
   const out={};
-  if(s.indexOf('(')>=0){
-    const re=/\((\d{2,4})\)([^()]*)/g; let m;
-    while((m=re.exec(s))){ out[m[1]]=(m[2]||'').trim(); }
+  if(/\(\d{2,4}\)/.test(s)){
+    // 괄호 형식 (01)...(10)...
+    const re=/\((\d{2,4})\)([^(]*)/g; let m;
+    while((m=re.exec(s))){ out[m[1]]=(m[2]||'').replace(/[\x1d\u001d]/g,'').trim(); }
   }else{
-    s=s.replace(/^\]d2/,'').replace(/^\]C1/,'').replace(/^\]Q3/,'');
-    const GS='\x1d'; const fixed={'00':18,'01':14,'11':6,'12':6,'13':6,'15':6,'16':6,'17':6,'20':2};
-    let i=0;
-    while(i<s.length){
-      const ai=s.substr(i,2); i+=2;
+    // 비괄호: 선행 심볼로지ID(]d2 등)와 선행 FNC1(\x1d) 제거
+    s=s.replace(/^[\x1d\u001d]+/,'').replace(/^\][A-Za-z]\d?/,'').replace(/^[\x1d\u001d]+/,'');
+    const isGS=(c)=> c==='\x1d' || c==='\u001d';
+    const fixed={'00':18,'01':14,'02':14,'11':6,'12':6,'13':6,'15':6,'16':6,'17':6,'20':2};
+    let i=0, guard=0;
+    while(i<s.length && guard++<60){
+      while(i<s.length && isGS(s[i])) i++;        // 사이사이 구분문자 건너뜀
+      if(i>=s.length) break;
+      const ai=s.substr(i,2);
+      if(!/^\d{2}$/.test(ai)) break;              // AI는 숫자 2자리여야 함
+      i+=2;
       if(fixed[ai]!=null){ out[ai]=s.substr(i,fixed[ai]); i+=fixed[ai]; }
-      else{ let g=s.indexOf(GS,i); if(g<0) g=s.length; out[ai]=s.substring(i,g); i=g; if(s[i]===GS) i++; }
+      else{ let j=i; while(j<s.length && !isGS(s[j])) j++; out[ai]=s.substring(i,j); i=j; }
     }
   }
-  const ymd=(v)=>{ if(!v||v.length<6) return ''; const y='20'+v.substr(0,2), mm=v.substr(2,2); let dd=v.substr(4,2); if(dd==='00') dd='01'; return y+'-'+mm+'-'+dd; };
-  return { gtin:(out['01']||'').replace(/\s/g,''), lot:out['10']||'', prodDate:ymd(out['11']), expDate:ymd(out['17']), serial:out['21']||'' };
+  const ymd=(v)=>{ v=String(v||'').replace(/\D/g,''); if(v.length<6) return ''; const y='20'+v.substr(0,2), mm=v.substr(2,2); let dd=v.substr(4,2); if(dd==='00') dd='01'; return y+'-'+mm+'-'+dd; };
+  return {
+    gtin:(out['01']||'').replace(/\D/g,''),
+    lot:(out['10']||'').trim(),
+    prodDate:ymd(out['11']),
+    expDate:ymd(out['17']),
+    serial:(out['21']||'').trim(),
+    _raw: original.replace(/[\x1d\u001d]/g,'⟨GS⟩')   // 진단용(구분문자 보이게)
+  };
 }
 
 /* ── 카메라 스캔 (BarcodeDetector, Pixel9 Chrome 지원) ── */
@@ -552,13 +567,14 @@ function openLotModal(p){
       if(g.expDate) m.querySelector('#l_exp').value=g.expDate;
       else if(g.prodDate) m.querySelector('#l_exp').value=addMonthsMinus1(g.prodDate, shelf);
       if(g.gtin) m.querySelector('#l_gtin').value=g.gtin;
-      // GTIN 제품 일치 확인
       const warn=m.querySelector('#l_warn');
+      let msg='';
       const known=(prod.gtins||[]).map(x=>String(x).replace(/^0+/,''));
       const scanned=String(g.gtin||'').replace(/^0+/,'');
-      if(g.gtin && known.length && known.indexOf(scanned)<0) warn.textContent='⚠️ 스캔한 GTIN이 이 제품에 등록된 값과 다릅니다. 박스를 확인하세요.';
-      else warn.textContent='';
-      toast('스캔 완료 — 값이 채워졌습니다');
+      if(g.gtin && known.length && known.indexOf(scanned)<0) msg+='⚠️ 스캔한 GTIN이 이 제품 등록값과 다릅니다. 박스를 확인하세요. ';
+      if(!g.lot){ msg+='LOT가 자동인식 안 됐어요 — 박스 보고 직접 입력하세요. '; m.querySelector('#l_lot').focus(); }
+      warn.innerHTML = escHtml(msg) + '<div style="color:var(--muted);font-size:10px;margin-top:4px;word-break:break-all">스캔 원문: '+escHtml(g._raw||'(없음)')+'</div>';
+      toast(g.lot ? '스캔 완료 — 값이 채워졌습니다' : '스캔됨 — LOT는 직접 입력하세요');
     });
   });
 
