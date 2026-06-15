@@ -255,7 +255,7 @@ const MENUS = [
   {id:'prod',   label:'제품관리',        ready:true},
   {id:'lot',    label:'LOT 관리 · 입고',  ready:true},
   {id:'ledger', label:'입출고관리대장',  ready:false},
-  {id:'insIn',  label:'입고검사성적서',  ready:false},
+  {id:'insIn',  label:'입고검사성적서',  ready:true},
   {id:'insOut', label:'출고검사성적서',  ready:false},
   {id:'files',  label:'첨부파일관리',    ready:false},
   {id:'trace',  label:'LOT 추적조회',    ready:false},
@@ -287,6 +287,7 @@ function navTo(id){
   if(usersUnsub){ usersUnsub(); usersUnsub=null; }
   if(id==='prod')          renderProducts();
   else if(id==='lot')      renderLot();
+  else if(id==='insIn')    renderInsInList();
   else if(id==='settings') renderSettings();
   else renderPlaceholder(m?m.label:'');
 }
@@ -455,11 +456,15 @@ function drawLotList(lots){
   lots.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
   let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
   lots.forEach(l=>{
-    const ins = (l.inspectInStatus==='done') ? '<span class="pill green">완료</span>' : '<span class="pill amber">대기</span>';
+    let ins;
+    if(l.inspectInStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-ipdf="'+escHtml(l._id)+'">성적서</button></div>';
+    else ins = canWrite() ? '<button class="btn btn-sm" data-iins="'+escHtml(l._id)+'">입고검사 작성</button>' : '<span class="pill amber">대기</span>';
     html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td><td>'+ins+'</td></tr>';
   });
   html+='</tbody></table>';
-  $('lotTable').innerHTML=html;
+  const wrap=$('lotTable'); wrap.innerHTML=html;
+  wrap.querySelectorAll('[data-iins]').forEach(b=>b.addEventListener('click',()=>renderInspectInForm(lots.find(x=>x._id===b.getAttribute('data-iins')))));
+  wrap.querySelectorAll('[data-ipdf]').forEach(b=>b.addEventListener('click',()=>openInspectPdfByLot(lots.find(x=>x._id===b.getAttribute('data-ipdf')))));
 }
 
 /* ── GS1 DataMatrix 파서 (괄호형식 + FNC1 raw 둘 다 지원) ── */
@@ -605,6 +610,191 @@ function openLotModal(p){
       toast('LOT가 등록되었습니다'); m.remove();
     }catch(e){ toast('저장 실패: '+e.message); }
   });
+}
+
+/* ════════ 입고검사성적서 (2-C) ════════ */
+const INSPECT_ITEMS_IN = [
+  {group:'외관', std:'포장상태는 양호할 것'},
+  {group:'외관', std:'제품 형상에 변형 및 오염, 흠집이 없을 것'},
+  {group:'외관', std:'외관 모양은 제품 표준서와 동일할 것'},
+  {group:'본체 및 부속품', std:'본체 및 부속품은 주문서 내용과 품명·수량이 동일할 것'},
+  {group:'기재사항(국문)', std:'부착되어 있을 것'}
+];
+
+// KS Q ISO 2859-1 특별검사수준 S-2, AQL 1.0 (시료문자/샘플크기). Ac0/Re1.
+function s2Plan(lotQty){
+  const n=Number(lotQty)||0;
+  let code;
+  if(n<=15) code='A'; else if(n<=150) code='B'; else if(n<=1200) code='C'; else if(n<=35000) code='D'; else code='E';
+  const size={A:2,B:3,C:5,D:8,E:13}[code];
+  return { code, size, ac:0, re:1 };
+}
+
+function info(label,val){ return '<div><div style="color:var(--muted);font-size:11px">'+escHtml(label)+'</div><div style="font-weight:600">'+escHtml(val||'-')+'</div></div>'; }
+
+// 서명 패드
+function setupSignature(canvas){
+  const ctx=canvas.getContext('2d');
+  ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#111';
+  let drawing=false, has=false;
+  function pos(e){ const r=canvas.getBoundingClientRect(); const t=(e.touches&&e.touches[0])?e.touches[0]:e; return { x:(t.clientX-r.left)*(canvas.width/r.width), y:(t.clientY-r.top)*(canvas.height/r.height) }; }
+  function start(e){ e.preventDefault(); drawing=true; has=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); }
+  function move(e){ if(!drawing) return; e.preventDefault(); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); }
+  function end(){ drawing=false; }
+  canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+  canvas.addEventListener('touchstart',start,{passive:false}); canvas.addEventListener('touchmove',move,{passive:false}); canvas.addEventListener('touchend',end);
+  return { clear(){ ctx.clearRect(0,0,canvas.width,canvas.height); has=false; }, isEmpty(){ return !has; }, dataUrl(){ return canvas.toDataURL('image/png'); } };
+}
+
+async function nextInsDocNo(prefix, dateStr){
+  const ym=(dateStr||new Date().toISOString().slice(0,10)).slice(0,7).replace('-','');
+  const all=(await get(ref(db,'gmp_data/inspectIn'))).val()||{};
+  let max=0; const re=new RegExp('^'+prefix+'-'+ym+'-(\\d+)$');
+  Object.values(all).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } });
+  return prefix+'-'+ym+'-'+String(max+1).padStart(3,'0');
+}
+
+function renderInspectInForm(lot){
+  if(!lot) return;
+  if(productsUnsub){ productsUnsub(); productsUnsub=null; }   // LOT 실시간 감시 끄기(폼 유지)
+  const prod = prodMap[lot.product] || {};
+  const plan = s2Plan(lot.initialQty);
+  const today = new Date().toISOString().slice(0,10);
+  let itemsHtml='';
+  INSPECT_ITEMS_IN.forEach((it,idx)=>{
+    itemsHtml += '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)">'+
+      '<div style="flex:1"><div style="font-size:11px;color:var(--muted)">'+escHtml(it.group)+'</div><div>'+escHtml(it.std)+'</div></div>'+
+      '<label class="chk" style="gap:4px"><input type="radio" name="it'+idx+'" value="pass" checked> 적합</label>'+
+      '<label class="chk" style="gap:4px"><input type="radio" name="it'+idx+'" value="fail"> 부적합</label></div>';
+  });
+  const sbatchField = lot.sterile ? '<div><div style="color:var(--muted);font-size:11px">멸균 Batch No.</div><input id="ii_sbatch" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px"></div>' : '';
+  $('page').innerHTML =
+    '<div class="card"><div class="card-h"><div class="t">입고검사성적서 작성 — '+escHtml(lot.product)+' / LOT '+escHtml(lot.lotNo)+'</div><button class="btn btn-ghost btn-sm" id="ii_back">← 목록으로</button></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;font-size:13px;margin-bottom:16px">'+
+      info('제조업체명', prod.maker||'') + info('표준통관발급번호', lot.customsNo||'') +
+      info('품목명', lot.product) + info('형 명(모델명)', lot.model||prod.model||'') +
+      info('수입면장번호', lot.importDeclNo||'') + info('Lot No.', lot.lotNo) +
+      info('수량', fmt(lot.initialQty)+' EA') + sbatchField +
+    '</div>'+
+    '<div class="card" style="background:#f8fafc;margin-bottom:14px"><b style="font-size:13px">검사방식</b><div style="margin-top:8px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">'+
+      '<label class="chk"><input type="radio" name="method" value="sampling" checked> 샘플링검사 (KS Q ISO 2859-1)</label>'+
+      '<label class="chk"><input type="radio" name="method" value="full"> 전수검사</label>'+
+      '<span style="color:var(--muted);font-size:12px">특별검사수준 S-2 · AQL 1.0 · 시료문자 <b>'+plan.code+'</b> · 샘플크기 <b>'+plan.size+'</b> · Ac '+plan.ac+' · Re '+plan.re+'</span></div></div>'+
+    '<b style="font-size:13px">검사 항목 <span style="color:var(--muted);font-weight:400">(시험방법: 육안검사)</span></b><div style="margin:8px 0 14px">'+itemsHtml+'</div>'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="ii_date" type="date" value="'+today+'"></div>'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="ii_inspector" value="'+escHtml(currentUser.name)+'"></div></div>'+
+    '<div class="field"><label>비고</label><input id="ii_remark" placeholder="(선택)"></div>'+
+    '<div class="field"><label>종합판정</label><div style="display:flex;gap:16px"><label class="chk"><input type="radio" name="overall" value="pass" checked> 합격</label><label class="chk"><input type="radio" name="overall" value="fail"> 불합격</label></div></div>'+
+    '<div class="field"><label>품질책임자 전자서명 <span style="color:var(--muted);font-size:11px">(아래 칸에 손가락/마우스로 서명)</span></label>'+
+      '<canvas id="ii_sign" width="600" height="160" style="width:100%;max-width:600px;height:160px;border:1px dashed var(--line);border-radius:8px;background:#fff;touch-action:none"></canvas>'+
+      '<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" id="ii_clear">서명 지우기</button></div></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="ii_cancel">취소</button><button class="btn" id="ii_save">저장 및 서명완료</button></div>'+
+    '</div>';
+  const sig = setupSignature($('ii_sign'));
+  $('ii_clear').addEventListener('click',()=>sig.clear());
+  $('ii_back').addEventListener('click',()=>navTo('lot'));
+  $('ii_cancel').addEventListener('click',()=>navTo('lot'));
+  function recalcOverall(){
+    let allPass=true;
+    INSPECT_ITEMS_IN.forEach((it,idx)=>{ const v=document.querySelector('input[name=it'+idx+']:checked'); if(v&&v.value==='fail') allPass=false; });
+    const tgt=document.querySelector('input[name=overall][value="'+(allPass?'pass':'fail')+'"]'); if(tgt) tgt.checked=true;
+  }
+  INSPECT_ITEMS_IN.forEach((it,idx)=>{ document.querySelectorAll('input[name=it'+idx+']').forEach(r=>r.addEventListener('change',recalcOverall)); });
+  $('ii_save').addEventListener('click',()=>saveInspectIn(lot, prod, plan, sig));
+}
+
+async function saveInspectIn(lot, prod, plan, sig){
+  if(sig.isEmpty()){ toast('품질책임자 서명을 해주세요'); return; }
+  const items = INSPECT_ITEMS_IN.map((it,idx)=>{ const v=document.querySelector('input[name=it'+idx+']:checked'); return { group:it.group, std:it.std, result:(v?v.value:'pass') }; });
+  const overall = (document.querySelector('input[name=overall]:checked')||{}).value || 'pass';
+  const method  = (document.querySelector('input[name=method]:checked')||{}).value || 'sampling';
+  const inspectDate = $('ii_date').value || new Date().toISOString().slice(0,10);
+  const inspector = ($('ii_inspector').value||currentUser.name).trim();
+  const remark = ($('ii_remark').value||'').trim();
+  const sbatch = lot.sterile ? (($('ii_sbatch')||{value:''}).value||'').trim() : '';
+  let docNo;
+  try{ docNo = await nextInsDocNo('AMT-OP-301', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
+  const rec = {
+    docNo, lotId:lot._id, product:lot.product, model:lot.model||prod.model||'', maker:prod.maker||'',
+    customsNo:lot.customsNo||'', importDeclNo:lot.importDeclNo||'', lotNo:lot.lotNo, sterilBatchNo:sbatch,
+    qty:lot.initialQty, sterile:!!lot.sterile,
+    method, sampleCode:plan.code, sampleSize:plan.size, ac:plan.ac, re:plan.re,
+    items, overall, remark, inspectDate, inspector, signature:sig.dataUrl(),
+    createdAt:Date.now(), createdBy:currentUser.name
+  };
+  try{
+    const pushed = await push(ref(db,'gmp_data/inspectIn'), rec);
+    await update(ref(db,'gmp_data/lots/'+lot._id), { inspectInStatus:'done', inspectInId:pushed.key, inspectInOverall:overall });
+    logAudit('등록','입고검사성적서 '+docNo+' ('+lot.product+'/'+lot.lotNo+') '+(overall==='pass'?'합격':'불합격'));
+    toast('입고검사성적서 저장 완료'); navTo('lot');
+  }catch(e){ toast('저장 실패: '+e.message); }
+}
+
+// 인쇄용 A4 HTML
+function buildInspectHtml(r){
+  const cols = (r.method==='full') ? 1 : (r.sampleSize||8);
+  let colHead=''; for(let i=0;i<cols;i++){ colHead+='<th>'+(r.method==='full'?'전수':(i+1))+'</th>'; }
+  function cells(result){ let c=''; const pass=result==='pass'; for(let i=0;i<cols;i++){ c+='<td class="rc">'+(pass?'<b>■</b>적합<br>□부적합':'□적합<br><b>■</b>부적합')+'</td>'; } return c; }
+  const groups={}; (r.items||[]).forEach(it=>{ (groups[it.group]=groups[it.group]||[]).push(it); });
+  let rows='';
+  Object.keys(groups).forEach(g=>{ const arr=groups[g]; arr.forEach((it,i)=>{ rows+='<tr>'; if(i===0) rows+='<td class="g" rowspan="'+arr.length+'">'+escHtml(g)+'</td>'; rows+='<td class="std">'+escHtml(it.std)+'</td><td class="m">육안검사</td>'+cells(it.result)+'</tr>'; }); });
+  const overall = r.overall==='pass';
+  const methodLine = r.method==='full' ? '■ 전수검사'
+    : '■ 샘플링검사 (KS Q ISO 2859-1) · 특별검사수준 S-2 · 보통검사 1회 · AQL 1.0 · 시료문자 '+escHtml(r.sampleCode)+' · 샘플크기 '+escHtml(r.sampleSize)+' · Ac '+escHtml(r.ac)+' · Re '+escHtml(r.re);
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>'+escHtml(r.docNo)+'</title><style>'+
+    '@page{size:A4;margin:14mm} *{box-sizing:border-box} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:12px} .wrap{max-width:720px;margin:0 auto}'+
+    'h1{text-align:center;font-size:20px;margin:0 0 16px;letter-spacing:8px} table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:5px 6px;vertical-align:middle}'+
+    '.hdr{position:relative} .hdrbox{position:absolute;right:0;top:0;width:210px} .hdrbox td{font-size:11px} .lbl{background:#f2f2f2;font-weight:600;white-space:nowrap}'+
+    '.grid th{background:#f2f2f2;font-size:11px} .grid td{font-size:11px;text-align:center} .grid .std{text-align:left} .g{font-weight:600;text-align:center;white-space:nowrap} .rc{font-size:9px;line-height:1.25}'+
+    '.center{text-align:center;margin:16px 0 6px;font-weight:600} .sign{display:flex;justify-content:space-around;align-items:flex-end;margin-top:10px} .sign img{height:46px;margin-left:8px;vertical-align:bottom}'+
+    '.foot{display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#333}'+
+    '</style></head><body><div class="wrap">'+
+    '<div class="hdr"><h1>입고검사성적서</h1><table class="hdrbox"><tr><td class="lbl">문서번호</td><td>'+escHtml(r.docNo)+'</td></tr><tr><td class="lbl">개정번호</td><td>(1)</td></tr><tr><td class="lbl">개정일자</td><td>2013.04.08</td></tr></table></div>'+
+    '<table><tr><td class="lbl">제조업체명</td><td>'+escHtml(r.maker)+'</td><td class="lbl">표준통관발급번호</td><td>'+escHtml(r.customsNo)+'</td></tr>'+
+    '<tr><td class="lbl">품목명</td><td>'+escHtml(r.product)+'</td><td class="lbl">형 명(모델명)</td><td>'+escHtml(r.model)+'</td></tr>'+
+    '<tr><td class="lbl">Lot No.</td><td>'+escHtml(r.lotNo)+'</td><td class="lbl">수입면장번호</td><td>'+escHtml(r.importDeclNo)+'</td></tr>'+
+    '<tr><td class="lbl">Sterilization batch No.</td><td>'+escHtml(r.sterilBatchNo)+'</td><td class="lbl">수량</td><td>'+Number(r.qty||0).toLocaleString()+' EA</td></tr></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:70px">검사방식</td><td>'+methodLine+'</td></tr></table>'+
+    '<table class="grid" style="margin-top:8px"><thead><tr><th rowspan="2" style="width:96px">검사사항</th><th rowspan="2">시험기준</th><th rowspan="2" style="width:62px">시험방법</th><th colspan="'+cols+'">결과 및 시료번호</th></tr><tr>'+colHead+'</tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:50px">비 고</td><td>'+escHtml(r.remark)+'</td><td class="lbl" style="width:70px">종합판정</td><td style="width:130px;text-align:center">'+(overall?'<b>■</b>합격 □불합격':'□합격 <b>■</b>불합격')+'</td></tr></table>'+
+    '<div class="center">검사결과는 상기와 같음.</div>'+
+    '<div class="sign"><div>검사일 : '+escHtml(r.inspectDate)+'</div><div>검사자 : '+escHtml(r.inspector)+(r.signature?'<img src="'+r.signature+'">':'')+'</div></div>'+
+    '<div class="foot"><div>(주)에이엠티코리아</div><div>'+escHtml(r.docNo)+'</div></div>'+
+    '</div></body></html>';
+}
+function printInspectIn(rec){
+  const w=window.open('','_blank');
+  if(!w){ toast('팝업이 차단됐습니다. 팝업 허용 후 다시 시도하세요'); return; }
+  w.document.open(); w.document.write(buildInspectHtml(rec)); w.document.close(); w.focus();
+  setTimeout(()=>{ try{ w.print(); }catch(_){} }, 450);
+  logAudit('PDF출력','입고검사성적서 PDF 출력: '+rec.docNo);
+}
+async function openInspectPdfByLot(lot){
+  if(!lot||!lot.inspectInId){ toast('성적서를 찾을 수 없습니다'); return; }
+  const rec=(await get(ref(db,'gmp_data/inspectIn/'+lot.inspectInId))).val();
+  if(!rec){ toast('성적서 기록이 없습니다'); return; }
+  printInspectIn(Object.assign({_id:lot.inspectInId}, rec));
+}
+
+function renderInsInList(){
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">입고검사성적서 (AMT-OP-301)</div></div><div id="insInTable"><div class="empty">불러오는 중...</div></div></div>';
+  const r=ref(db,'gmp_data/inspectIn');
+  const cb=onValue(r,(snap)=>{
+    const val=snap.val()||{};
+    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    if(!rows.length){ $('insInTable').innerHTML='<div class="empty">아직 작성된 입고검사성적서가 없습니다. (LOT 관리 · 입고에서 “입고검사 작성”)</div>'; return; }
+    rows.sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
+    let html='<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
+    rows.forEach(x=>{
+      const ov = x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>';
+      html+='<tr><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button></div></td></tr>';
+    });
+    html+='</tbody></table>';
+    const wrap=$('insInTable'); wrap.innerHTML=html;
+    wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectIn(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
+  },(err)=>{ $('insInTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  usersUnsub=()=>off(r,'value',cb);
 }
 
 /* ── 설정: 사용자관리 ── */
