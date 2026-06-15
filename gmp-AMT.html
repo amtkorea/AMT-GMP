@@ -453,7 +453,7 @@ function drawPending(lots){
 function drawLotList(lots){
   if(!lots.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다.</div>'; return; }
   lots.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
-  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>초기재고</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
+  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
   lots.forEach(l=>{
     const ins = (l.inspectInStatus==='done') ? '<span class="pill green">완료</span>' : '<span class="pill amber">대기</span>';
     html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td><td>'+ins+'</td></tr>';
