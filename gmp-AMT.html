@@ -683,7 +683,7 @@ function renderInspectInForm(lot){
     '<b style="font-size:13px">검사 항목 <span style="color:var(--muted);font-weight:400">(시험방법: 육안검사)</span></b><div style="margin:8px 0 14px">'+itemsHtml+'</div>'+
     '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
       '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="ii_date" type="date" value="'+today+'"></div>'+
-      '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="ii_inspector" value="'+escHtml(currentUser.name)+'"></div></div>'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="ii_inspector" value="강승섭"></div></div>'+
     '<div class="field"><label>비고</label><input id="ii_remark" placeholder="(선택)"></div>'+
     '<div class="field"><label>종합판정</label><div style="display:flex;gap:16px"><label class="chk"><input type="radio" name="overall" value="pass" checked> 합격</label><label class="chk"><input type="radio" name="overall" value="fail"> 불합격</label></div></div>'+
     '<div class="field"><label>품질책임자 전자서명 <span style="color:var(--muted);font-size:11px">(아래 칸에 손가락/마우스로 서명)</span></label>'+
@@ -745,7 +745,7 @@ function buildInspectHtml(r){
   return '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>'+escHtml(r.docNo)+'</title><style>'+
     '@page{size:A4;margin:14mm} *{box-sizing:border-box} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:12px} .wrap{max-width:720px;margin:0 auto}'+
     'h1{text-align:center;font-size:20px;margin:0 0 16px;letter-spacing:8px} table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:5px 6px;vertical-align:middle}'+
-    '.hdr{position:relative} .hdrbox{position:absolute;right:0;top:0;width:210px} .hdrbox td{font-size:11px} .lbl{background:#f2f2f2;font-weight:600;white-space:nowrap}'+
+    '.hdr{position:relative;min-height:74px;margin-bottom:6px} .hdrbox{position:absolute;right:0;top:0;width:210px} .hdrbox td{font-size:11px} .lbl{background:#f2f2f2;font-weight:600;white-space:nowrap}'+
     '.grid th{background:#f2f2f2;font-size:11px} .grid td{font-size:11px;text-align:center} .grid .std{text-align:left} .g{font-weight:600;text-align:center;white-space:nowrap} .rc{font-size:9px;line-height:1.25}'+
     '.center{text-align:center;margin:16px 0 6px;font-weight:600} .sign{display:flex;justify-content:space-around;align-items:flex-end;margin-top:10px} .sign img{height:46px;margin-left:8px;vertical-align:bottom}'+
     '.foot{display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#333}'+
