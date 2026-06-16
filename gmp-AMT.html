@@ -459,17 +459,54 @@ function drawPending(lots){
 function drawLotList(lots){
   if(!lots.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다.</div>'; return; }
   lots.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
-  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
+  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
   lots.forEach(l=>{
     let ins;
     if(l.inspectInStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-ipdf="'+escHtml(l._id)+'">성적서</button></div>';
     else ins = canWrite() ? '<button class="btn btn-sm" data-iins="'+escHtml(l._id)+'">입고검사 작성</button>' : '<span class="pill amber">대기</span>';
-    html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td><td>'+ins+'</td></tr>';
+    const edit = canWrite() ? '<td><button class="btn btn-ghost btn-sm" data-ledit="'+escHtml(l._id)+'">수정</button></td>' : '';
+    html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate)+'</td><td>'+escHtml(l.expiry)+'</td><td>'+fmt(l.initialQty)+'</td><td>'+fmt(l.currentQty)+'</td><td>'+ins+'</td>'+edit+'</tr>';
   });
   html+='</tbody></table>';
   const wrap=$('lotTable'); wrap.innerHTML=html;
   wrap.querySelectorAll('[data-iins]').forEach(b=>b.addEventListener('click',()=>renderInspectInForm(lots.find(x=>x._id===b.getAttribute('data-iins')))));
   wrap.querySelectorAll('[data-ipdf]').forEach(b=>b.addEventListener('click',()=>openInspectPdfByLot(lots.find(x=>x._id===b.getAttribute('data-ipdf')))));
+  wrap.querySelectorAll('[data-ledit]').forEach(b=>b.addEventListener('click',()=>openLotEditModal(lots.find(x=>x._id===b.getAttribute('data-ledit')))));
+}
+
+function openLotEditModal(l){
+  if(!l) return;
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal"><div class="modal-h"><b>LOT 수정 — '+escHtml(l.product)+'</b></div>'+
+    '<div class="modal-b">'+
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">수량(재고)은 보호를 위해 여기서 수정하지 않습니다.</div>'+
+    '<div class="field"><label>LOT 번호</label><input id="le_lot" value="'+escHtml(l.lotNo||'')+'"></div>'+
+    '<div style="display:flex;gap:12px"><div class="field" style="flex:1"><label>제조일자</label><input id="le_prod" type="date" value="'+escHtml(l.prodDate||'')+'"></div>'+
+    '<div class="field" style="flex:1"><label>유통기한</label><input id="le_exp" type="date" value="'+escHtml(l.expiry||'')+'"></div></div>'+
+    '<div class="field"><label>입고일</label><input id="le_in" type="date" value="'+escHtml(l.inDate||'')+'"></div>'+
+    '<div class="field"><label>표준등록(통관) 발급번호</label><input id="le_customs" value="'+escHtml(l.customsNo||'')+'" placeholder="예: 2-305-01-25-0021896-5"></div>'+
+    '<div class="field"><label>수입신고(면장) 번호</label><input id="le_decl" value="'+escHtml(l.importDeclNo||'')+'" placeholder="예: 11194-25-800666M"></div>'+
+    '</div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="le_cancel">취소</button><button class="btn" id="le_save">저장</button></div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#le_cancel').addEventListener('click',()=>m.remove());
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#le_save').addEventListener('click',async()=>{
+    const upd={
+      lotNo:(m.querySelector('#le_lot').value||'').trim(),
+      prodDate:m.querySelector('#le_prod').value||'',
+      expiry:m.querySelector('#le_exp').value||'',
+      inDate:m.querySelector('#le_in').value||'',
+      customsNo:(m.querySelector('#le_customs').value||'').trim(),
+      importDeclNo:(m.querySelector('#le_decl').value||'').trim()
+    };
+    if(!upd.lotNo){ toast('LOT 번호를 입력하세요'); return; }
+    try{
+      await update(ref(db,'gmp_data/lots/'+l._id), upd);
+      logAudit('수정','LOT 수정: '+l.product+' / '+upd.lotNo);
+      toast('저장되었습니다'); m.remove();
+    }catch(e){ toast('저장 실패: '+e.message); }
+  });
 }
 
 /* ── GS1 DataMatrix 파서 (괄호형식 + FNC1 raw 둘 다 지원) ── */
@@ -604,7 +641,7 @@ function openLotModal(p){
       customsNo:(m.querySelector('#l_customs').value||'').trim(),
       importDeclNo:(m.querySelector('#l_decl').value||'').trim(),
       initialQty:qty, currentQty:qty,
-      srcInvId:p.srcInvId, opProduct:p.opProduct,
+      srcInvId:p.srcInvId, opProduct:p.opProduct, inDate:p.date||'',
       sterile:!!prod.sterile,
       inspectInStatus:'pending',
       createdAt:Date.now(), createdBy:currentUser.name
@@ -643,18 +680,108 @@ async function renderLedger(){
   else if(amtKy.status==='noaccess') banner='<div class="banner warn">⚠️ 운영앱 접근 권한 없음. 출고 자동연동은 운영앱 관리자(유경호 등)만 가능합니다.</div>';
   else banner='<div class="banner bad">❌ 운영앱 연결 실패: '+escHtml(amtKy.err)+'</div>';
 
+  let modelOpts=''; const seen={};
+  Object.values(prodMap).forEach(p=>{ const md=p.model||p.name; if(md&&!seen[md]){ seen[md]=1; modelOpts+='<option value="'+escHtml(md)+'">'+escHtml(md)+'</option>'; } });
+
   $('page').innerHTML = banner +
     '<div class="card"><div class="card-h"><div class="t">출고 대기 (내부거래 AMT→KY 자동연동)</div></div>'+
     '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 “AMT→KY 물품공급” 건입니다. 출고처는 KY 메디칼 고정, MEDIAS는 T·WTP로 나뉩니다. “출고 처리”에서 LOT는 유통기한 임박순(선입선출)으로 자동 배정됩니다.</div>'+
     '<div id="outPending"></div></div>'+
-    '<div class="card"><div class="card-h"><div class="t">출고 기록</div></div><div id="outList"></div></div>';
+    '<div class="card"><div class="card-h"><div class="t">출고 기록</div></div><div id="outList"></div></div>'+
+    '<div class="card"><div class="card-h"><div class="t">입출고관리대장 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-OP-601</span></div><button class="btn btn-ghost btn-sm" id="lg_print">🖨 인쇄</button></div>'+
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:end">'+
+      '<div class="field" style="margin:0"><label>Model명</label><select id="lg_model"><option value="">전체</option>'+modelOpts+'</select></div>'+
+      '<div class="field" style="margin:0"><label>LOT</label><input id="lg_lot" placeholder="LOT 검색"></div>'+
+      '<div class="field" style="margin:0"><label>시작일</label><input id="lg_from" type="date"></div>'+
+      '<div class="field" style="margin:0"><label>종료일</label><input id="lg_to" type="date"></div>'+
+    '</div>'+
+    '<div id="ledgerTable" style="overflow-x:auto"></div></div>';
+
+  ['lg_model','lg_lot','lg_from','lg_to'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input',drawLedgerTable); });
+  if($('lg_print')) $('lg_print').addEventListener('click',printLedger);
 
   const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound');
   const cbL=onValue(rLots,(s)=>{ ledgerLots=snapArr(s); redrawLedger(); });
   const cbO=onValue(rOut,(s)=>{ ledgerOut=snapArr(s); redrawLedger(); });
   productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); };
 }
-function redrawLedger(){ drawOutPending(); drawOutboundList(); }
+function redrawLedger(){ drawOutPending(); drawOutboundList(); drawLedgerTable(); }
+
+/* ════════ 입출고관리대장 (AMT-OP-601) — 합격 건 running 재고 ════════ */
+function ledgerRows(){
+  const out=[];
+  const lots = ledgerLots.slice().sort((a,b)=> String(a.inDate||a.prodDate||'').localeCompare(String(b.inDate||b.prodDate||'')) || Number(a.createdAt||0)-Number(b.createdAt||0));
+  lots.forEach(l=>{
+    if(!(l.inspectInStatus==='done' && l.inspectInOverall==='pass')) return; // 입고검사 합격 LOT만
+    let bal=Number(l.initialQty)||0;
+    out.push({ kind:'in', model:l.model||l.product, lot:l.lotNo, inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, bal });
+    const outs = ledgerOut.filter(o=> o.lotId===l._id && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
+      .sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || Number(a.createdAt||0)-Number(b.createdAt||0));
+    outs.forEach(o=>{ bal -= Number(o.qty)||0; out.push({ kind:'out', model:o.model||l.model||o.product, lot:l.lotNo, outDate:o.date, outQty:Number(o.qty)||0, dest:o.dest||'KY 메디칼', bal }); });
+  });
+  return out;
+}
+function ledgerFiltered(){
+  let rows=ledgerRows();
+  const fModel=($('lg_model')&&$('lg_model').value||'').trim();
+  const fLot=($('lg_lot')&&$('lg_lot').value||'').trim().toLowerCase();
+  const fFrom=($('lg_from')&&$('lg_from').value)||'';
+  const fTo=($('lg_to')&&$('lg_to').value)||'';
+  if(fModel) rows=rows.filter(r=>String(r.model)===fModel);
+  if(fLot) rows=rows.filter(r=>String(r.lot||'').toLowerCase().includes(fLot));
+  if(fFrom||fTo){ rows=rows.filter(r=>{ const d=r.kind==='in'?r.inDate:r.outDate; if(!d) return false; if(fFrom&&d<fFrom) return false; if(fTo&&d>fTo) return false; return true; }); }
+  return rows;
+}
+function drawLedgerTable(){
+  const el=$('ledgerTable'); if(!el) return;
+  const rows=ledgerFiltered();
+  if(!rows.length){ el.innerHTML='<div class="empty">검사 합격된 입출고 건이 없습니다. (입고검사·출고검사 합격 시 표시)</div>'; return; }
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-OP-601 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격 건만 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
+  html+='<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
+  rows.forEach((r,i)=>{
+    const isIn=r.kind==='in'; const bg=isIn?'#ffffff':'#f3f8ff';
+    html+='<tr style="background:'+bg+'">'+
+      '<td>'+(i+1)+'</td>'+
+      '<td><b>'+escHtml(r.model)+'</b></td>'+
+      '<td>'+escHtml(r.lot)+'</td>'+
+      '<td>'+(isIn?escHtml(r.inDate):'')+'</td>'+
+      '<td style="text-align:right">'+(isIn?fmt(r.inQty):'')+'</td>'+
+      '<td>'+(isIn?'':escHtml(r.outDate))+'</td>'+
+      '<td style="text-align:right">'+(isIn?'':fmt(r.outQty))+'</td>'+
+      '<td style="text-align:right"></td>'+
+      '<td style="text-align:right"><b>'+fmt(r.bal)+'</b></td>'+
+      '<td>'+(isIn?'':escHtml(r.dest))+'</td>'+
+      '<td><span class="pill green">합격</span></td>'+
+      '<td></td>'+
+      '</tr>';
+  });
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+function printLedger(){
+  const rows=ledgerFiltered();
+  if(!rows.length){ toast('인쇄할 합격 건이 없습니다'); return; }
+  let body='';
+  rows.forEach((r,i)=>{ const isIn=r.kind==='in';
+    body+='<tr>'+
+      '<td>'+(i+1)+'</td><td>'+escHtml(r.model)+'</td><td>'+escHtml(r.lot)+'</td>'+
+      '<td>'+(isIn?escHtml(r.inDate):'')+'</td><td class="r">'+(isIn?Number(r.inQty).toLocaleString():'')+'</td>'+
+      '<td>'+(isIn?'':escHtml(r.outDate))+'</td><td class="r">'+(isIn?'':Number(r.outQty).toLocaleString())+'</td>'+
+      '<td class="r"></td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
+      '<td>'+(isIn?'':escHtml(r.dest))+'</td><td>합격</td><td></td></tr>';
+  });
+  const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>입출고관리대장 AMT-OP-601</title><style>'+
+    '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
+    'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right}'+
+    '.foot{margin-top:14px;text-align:right;font-size:11px}'+
+    '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-OP-601 · (주)에이엠티코리아 · 검사 합격 건만 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
+    '<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
+    '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
+  logAudit('PDF출력','입출고관리대장 인쇄 ('+rows.length+'행)');
+}
 
 function drawOutPending(){
   const el=$('outPending'); if(!el) return;
@@ -919,6 +1046,8 @@ async function openInspectPdfByLot(lot){
   if(!lot||!lot.inspectInId){ toast('성적서를 찾을 수 없습니다'); return; }
   const rec=(await get(ref(db,'gmp_data/inspectIn/'+lot.inspectInId))).val();
   if(!rec){ toast('성적서 기록이 없습니다'); return; }
+  rec.customsNo = lot.customsNo || rec.customsNo || '';
+  rec.importDeclNo = lot.importDeclNo || rec.importDeclNo || '';
   printInspectIn(Object.assign({_id:lot.inspectInId}, rec));
 }
 
@@ -1035,6 +1164,7 @@ async function openInspectOutPdf(ob){
   if(!ob||!ob.inspectOutId){ toast('성적서를 찾을 수 없습니다'); return; }
   const rec=(await get(ref(db,'gmp_data/inspectOut/'+ob.inspectOutId))).val();
   if(!rec){ toast('성적서 기록이 없습니다'); return; }
+  if(ob.lotId){ try{ const lot=(await get(ref(db,'gmp_data/lots/'+ob.lotId))).val()||{}; rec.customsNo=lot.customsNo||rec.customsNo||''; rec.importDeclNo=lot.importDeclNo||rec.importDeclNo||''; }catch(_){} }
   printInspectOut(Object.assign({_id:ob.inspectOutId}, rec));
 }
 function renderInsOutList(){
