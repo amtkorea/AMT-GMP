@@ -1299,7 +1299,7 @@ async function gasUpload(cfg, payload){
 }
 async function renderFiles(){
   $('page').innerHTML='<div class="card"><div class="empty">불러오는 중...</div></div>';
-  let cfg={}; try{ cfg=(await get(ref(db,'amt_config'))).val()||{}; }catch(_){ cfg={}; }
+  let cfg={}; try{ const raw=(await get(ref(db,'amt_config'))).val()||{}; const gu=raw.gmpUpload||{}; cfg={ driveUploadUrl: gu.url||raw.driveUploadUrl||'', uploadToken: gu.token||raw.uploadToken||'' }; }catch(_){ cfg={}; }
   let lots=[];
   try{ const lv=(await get(ref(db,'gmp_data/lots'))).val()||{}; lots=Object.keys(lv).map(k=>Object.assign({_id:k},lv[k])).sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))); }
   catch(e){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(e.message)+'</div></div>'; return; }
