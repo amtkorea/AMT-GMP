@@ -1520,10 +1520,29 @@ async function printNcrLedger(){
 }
 
 /* ── 설정: 사용자관리 ── */
+async function resetTestData(){
+  if(!currentUser || currentUser.role!=='super'){ toast('총괄관리자만 가능합니다'); return; }
+  if(!confirm('테스트 데이터(LOT·출고·검사성적서·부적합·첨부링크·작업이력)를 모두 삭제합니다.\n제품·사용자·설정은 유지됩니다.\n계속할까요?')) return;
+  const t=prompt("되돌릴 수 없습니다. 진행하려면 '삭제' 를 입력하세요:");
+  if(t!=='삭제'){ toast('취소되었습니다'); return; }
+  const nodes=['gmp_data/lots','gmp_data/outbound','gmp_data/inspectIn','gmp_data/inspectOut','gmp_data/nonconformities','gmp_data/ignoredTrades','gmp_data/attachments','gmp_audit'];
+  try{
+    for(const n of nodes){ await set(ref(db,n), null); }
+    await logAudit('초기화','테스트 데이터 초기화 (제품·사용자·설정 유지)');
+    toast('테스트 데이터를 삭제했습니다');
+    setTimeout(()=>navTo('dash'),700);
+  }catch(e){ toast('삭제 실패: '+e.message); }
+}
 function renderSettings(){
+  const danger = (currentUser && currentUser.role==='super') ?
+    '<div class="card" style="border:1px solid #fca5a5;background:#fff7f7;margin-top:14px"><div class="card-h"><div class="t" style="color:#dc2626">테스트 데이터 초기화</div></div>'+
+    '<div style="font-size:13px;line-height:1.7">시험 삼아 입력한 <b>LOT·출고·입고/출고검사성적서·부적합품·첨부링크·작업이력(Audit)</b>을 모두 삭제합니다.<br>'+
+    '<b>유지</b>: 제품(4종)·사용자·로그인·설정값. <span style="color:#dc2626">되돌릴 수 없습니다.</span></div>'+
+    '<div style="margin-top:10px"><button class="btn btn-danger btn-sm" id="resetBtn">테스트 데이터 모두 삭제</button></div></div>' : '';
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">사용자 관리</div><button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>';
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">관리자=등록·검사·서명 가능 / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>'+danger;
   $('addUserBtn').addEventListener('click',()=>openUserModal());
+  if($('resetBtn')) $('resetBtn').addEventListener('click',resetTestData);
   const r=ref(db,'gmp_admins');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
