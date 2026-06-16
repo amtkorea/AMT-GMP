@@ -256,7 +256,7 @@ const MENUS = [
   {id:'lot',    label:'LOT 관리 · 입고',  ready:true},
   {id:'ledger', label:'입출고관리대장',  ready:true},
   {id:'insIn',  label:'입고검사성적서',  ready:true},
-  {id:'insOut', label:'출고검사성적서',  ready:false},
+  {id:'insOut', label:'출고검사성적서',  ready:true},
   {id:'files',  label:'첨부파일관리',    ready:false},
   {id:'trace',  label:'LOT 추적조회',    ready:false},
   {id:'audit',  label:'Audit Trail',     ready:false},
@@ -289,6 +289,7 @@ function navTo(id){
   else if(id==='lot')      renderLot();
   else if(id==='ledger')   renderLedger();
   else if(id==='insIn')    renderInsInList();
+  else if(id==='insOut')   renderInsOutList();
   else if(id==='settings') renderSettings();
   else renderPlaceholder(m?m.label:'');
 }
@@ -617,14 +618,25 @@ function openLotModal(p){
 }
 
 /* ════════ 출고 (내부거래 AMT→KY 자동연동) — 2-D-1 ════════ */
-let ledgerLots=[], ledgerOut=[];
+let ledgerLots=[], ledgerOut=[], ignoredTrades=new Set();
 function snapArr(snap){ const v=snap.val()||{}; return Object.keys(v).map(k=>Object.assign({_id:k},v[k])); }
+function igKey(id, product){ return String(id+'_'+product).replace(/[^a-zA-Z0-9]/g,'_'); }
+async function ignoreTrade(r){
+  if(!confirm('이 건을 출고 대기에서 숨길까요? (운영앱은 안 건드립니다)\n'+r.product+' '+fmt(r.qty)+'개 / '+r.date)) return;
+  const k=igKey(r.srcTradeId, r.product);
+  try{
+    await set(ref(db,'gmp_data/ignoredTrades/'+k), {srcTradeId:r.srcTradeId, product:r.product, qty:r.qty, date:r.date, ts:Date.now(), by:currentUser.name});
+    ignoredTrades.add(k); logAudit('무시','출고대기 숨김: '+r.product+' '+fmt(r.qty)+' ('+r.date+')'); drawOutPending(); toast('숨겼습니다');
+  }catch(e){ toast('실패: '+e.message); }
+}
 
 async function renderLedger(){
   $('page').innerHTML='<div class="card"><div class="empty">운영앱(AMT) 연결 중...</div></div>';
   await connectAmtKy();
   const pv=(await get(ref(db,'gmp_data/products'))).val()||{};
   prodMap={}; Object.keys(pv).forEach(k=>{ const p=Object.assign({_id:k},pv[k]); prodMap[p.name]=p; });
+  const ig=(await get(ref(db,'gmp_data/ignoredTrades'))).val()||{};
+  ignoredTrades=new Set(Object.keys(ig));
 
   let banner='';
   if(amtKy.status==='ok') banner='<div class="banner ok">✅ 운영앱(AMT) 연결됨 · 내부거래(AMT→KY) <b>'+amtKy.internalTrades.length+'</b>건</div>';
@@ -650,13 +662,16 @@ function drawOutPending(){
   const done=new Set(ledgerOut.map(o=>String(o.srcTradeId)+'|'+o.product));
   const trades=amtKy.internalTrades.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
   const rows=[];
-  trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(!done.has(String(t.id)+'|'+gp)) rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
+  trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(done.has(String(t.id)+'|'+gp)) return; if(ignoredTrades.has(igKey(t.id,gp))) return; rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
   if(!rows.length){ el.innerHTML='<div class="empty">대기 중인 출고 건이 없습니다. (모두 처리됨)</div>'; return; }
   let html='<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
-  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
+  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button><button class="btn btn-ghost btn-sm" data-ig="'+idx+'">무시</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
   html+='</tbody></table>';
   el.innerHTML=html;
-  if(canWrite()) el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(rows[parseInt(b.getAttribute('data-out'),10)])));
+  if(canWrite()){
+    el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(rows[parseInt(b.getAttribute('data-out'),10)])));
+    el.querySelectorAll('[data-ig]').forEach(b=>b.addEventListener('click',()=>ignoreTrade(rows[parseInt(b.getAttribute('data-ig'),10)])));
+  }
 }
 
 // 유통기한 임박순(선입선출) 자동 배정
@@ -723,11 +738,15 @@ function drawOutboundList(){
   const rows=ledgerOut.slice().sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
   let html='<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th></tr></thead><tbody>';
   rows.forEach(o=>{
-    const ins=o.inspectOutStatus==='done'?'<span class="pill green">완료</span>':'<span class="pill amber">대기</span>';
+    let ins;
+    if(o.inspectOutStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-opdf="'+escHtml(o._id)+'">성적서</button></div>';
+    else ins = canWrite() ? '<button class="btn btn-sm" data-oins="'+escHtml(o._id)+'">출고검사 작성</button>' : '<span class="pill amber">대기</span>';
     html+='<tr><td>'+escHtml(o.date)+'</td><td><b>'+escHtml(o.product)+'</b></td><td>'+escHtml(o.lotNo)+'</td><td>'+fmt(o.qty)+'</td><td>'+escHtml(o.dest)+'</td><td>'+ins+'</td></tr>';
   });
   html+='</tbody></table>';
   el.innerHTML=html;
+  el.querySelectorAll('[data-oins]').forEach(b=>b.addEventListener('click',()=>renderInspectOutForm(rows.find(x=>x._id===b.getAttribute('data-oins')))));
+  el.querySelectorAll('[data-opdf]').forEach(b=>b.addEventListener('click',()=>openInspectOutPdf(rows.find(x=>x._id===b.getAttribute('data-opdf')))));
 }
 
 /* ════════ 입고검사성적서 (2-C) ════════ */
@@ -766,9 +785,10 @@ function setupSignature(canvas){
 
 async function nextInsDocNo(prefix, dateStr){
   const ym=(dateStr||new Date().toISOString().slice(0,10)).slice(0,7).replace('-','');
-  const all=(await get(ref(db,'gmp_data/inspectIn'))).val()||{};
+  const a=(await get(ref(db,'gmp_data/inspectIn'))).val()||{};
+  const b=(await get(ref(db,'gmp_data/inspectOut'))).val()||{};
   let max=0; const re=new RegExp('^'+prefix+'-'+ym+'-(\\d+)$');
-  Object.values(all).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } });
+  [a,b].forEach(obj=>Object.values(obj).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } }));
   return prefix+'-'+ym+'-'+String(max+1).padStart(3,'0');
 }
 
@@ -912,6 +932,140 @@ function renderInsInList(){
     const wrap=$('insInTable'); wrap.innerHTML=html;
     wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectIn(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
   },(err)=>{ $('insInTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  usersUnsub=()=>off(r,'value',cb);
+}
+
+/* ════════ 출고검사성적서 (2-D-2) ════════ */
+const INSPECT_ITEMS_OUT = [
+  {group:'외관', std:'포장상태는 양호할 것'},
+  {group:'외관', std:'제품 형상에 변형 및 오염, 흠집이 없을 것'},
+  {group:'수량 및 표시', std:'출고 수량이 거래 내용과 일치할 것'},
+  {group:'기재사항(국문)', std:'라벨·유통기한 표시가 적합할 것'}
+];
+
+function renderInspectOutForm(ob){
+  if(!ob) return;
+  if(productsUnsub){ productsUnsub(); productsUnsub=null; }
+  const prod = prodMap[ob.product] || {};
+  const plan = s2Plan(ob.qty);
+  const today = new Date().toISOString().slice(0,10);
+  let itemsHtml='';
+  INSPECT_ITEMS_OUT.forEach((it,idx)=>{
+    itemsHtml += '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)">'+
+      '<div style="flex:1"><div style="font-size:11px;color:var(--muted)">'+escHtml(it.group)+'</div><div>'+escHtml(it.std)+'</div></div>'+
+      '<label class="chk" style="gap:4px"><input type="radio" name="ot'+idx+'" value="pass" checked> 적합</label>'+
+      '<label class="chk" style="gap:4px"><input type="radio" name="ot'+idx+'" value="fail"> 부적합</label></div>';
+  });
+  const sbatchField = ob.sterile ? '<div><div style="color:var(--muted);font-size:11px">멸균 Batch No.</div><input id="oo_sbatch" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px"></div>' : '';
+  $('page').innerHTML =
+    '<div class="card"><div class="card-h"><div class="t">출고검사성적서 작성 — '+escHtml(ob.product)+' / LOT '+escHtml(ob.lotNo)+'</div><button class="btn btn-ghost btn-sm" id="oo_back">← 목록으로</button></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;font-size:13px;margin-bottom:16px">'+
+      info('제조업체명', prod.maker||ob.maker||'') + info('출고처', ob.dest||'KY 메디칼') +
+      info('품목명', ob.product) + info('형 명(모델명)', ob.model||prod.model||'') +
+      info('Lot No.', ob.lotNo) + info('출고일', ob.date) +
+      info('출고수량', fmt(ob.qty)+' EA') + sbatchField +
+    '</div>'+
+    '<div class="card" style="background:#f8fafc;margin-bottom:14px"><b style="font-size:13px">검사방식</b><div style="margin-top:8px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">'+
+      '<label class="chk"><input type="radio" name="omethod" value="sampling" checked> 샘플링검사 (KS Q ISO 2859-1)</label>'+
+      '<label class="chk"><input type="radio" name="omethod" value="full"> 전수검사</label>'+
+      '<span style="color:var(--muted);font-size:12px">특별검사수준 S-2 · AQL 1.0 · 시료문자 <b>'+plan.code+'</b> · 샘플크기 <b>'+plan.size+'</b> · Ac '+plan.ac+' · Re '+plan.re+'</span></div></div>'+
+    '<b style="font-size:13px">검사 항목 <span style="color:var(--muted);font-weight:400">(시험방법: 육안검사)</span></b><div style="margin:8px 0 14px">'+itemsHtml+'</div>'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="oo_date" type="date" value="'+today+'"></div>'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="oo_inspector" value="강승섭"></div></div>'+
+    '<div class="field"><label>비고</label><input id="oo_remark" placeholder="(선택)"></div>'+
+    '<div class="field"><label>종합판정</label><div style="display:flex;gap:16px"><label class="chk"><input type="radio" name="ooverall" value="pass" checked> 합격</label><label class="chk"><input type="radio" name="ooverall" value="fail"> 불합격</label></div></div>'+
+    '<div class="field"><label>품질책임자 전자서명</label>'+
+      '<canvas id="oo_sign" width="600" height="160" style="width:100%;max-width:600px;height:160px;border:1px dashed var(--line);border-radius:8px;background:#fff;touch-action:none"></canvas>'+
+      '<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" id="oo_clear">서명 지우기</button></div></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="oo_cancel">취소</button><button class="btn" id="oo_save">저장 및 서명완료</button></div>'+
+    '</div>';
+  const sig=setupSignature($('oo_sign'));
+  $('oo_clear').addEventListener('click',()=>sig.clear());
+  $('oo_back').addEventListener('click',()=>navTo('ledger'));
+  $('oo_cancel').addEventListener('click',()=>navTo('ledger'));
+  function recalc(){ let allPass=true; INSPECT_ITEMS_OUT.forEach((it,idx)=>{ const v=document.querySelector('input[name=ot'+idx+']:checked'); if(v&&v.value==='fail') allPass=false; }); const t=document.querySelector('input[name=ooverall][value="'+(allPass?'pass':'fail')+'"]'); if(t) t.checked=true; }
+  INSPECT_ITEMS_OUT.forEach((it,idx)=>{ document.querySelectorAll('input[name=ot'+idx+']').forEach(r=>r.addEventListener('change',recalc)); });
+  $('oo_save').addEventListener('click',()=>saveInspectOut(ob, prod, plan, sig));
+}
+
+async function saveInspectOut(ob, prod, plan, sig){
+  if(sig.isEmpty()){ toast('품질책임자 서명을 해주세요'); return; }
+  const items=INSPECT_ITEMS_OUT.map((it,idx)=>{ const v=document.querySelector('input[name=ot'+idx+']:checked'); return {group:it.group, std:it.std, result:(v?v.value:'pass')}; });
+  const overall=(document.querySelector('input[name=ooverall]:checked')||{}).value||'pass';
+  const method=(document.querySelector('input[name=omethod]:checked')||{}).value||'sampling';
+  const inspectDate=$('oo_date').value||new Date().toISOString().slice(0,10);
+  const inspector=($('oo_inspector').value||'강승섭').trim();
+  const remark=($('oo_remark').value||'').trim();
+  const sbatch=ob.sterile?(($('oo_sbatch')||{value:''}).value||'').trim():'';
+  let docNo; try{ docNo=await nextInsDocNo('AMT-OP-301', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
+  const rec={ docNo, outboundId:ob._id, product:ob.product, model:ob.model||prod.model||'', maker:prod.maker||ob.maker||'',
+    lotNo:ob.lotNo, sterilBatchNo:sbatch, dest:ob.dest||'KY 메디칼', outDate:ob.date,
+    qty:ob.qty, sterile:!!ob.sterile, method, sampleCode:plan.code, sampleSize:plan.size, ac:plan.ac, re:plan.re,
+    items, overall, remark, inspectDate, inspector, signature:sig.dataUrl(), createdAt:Date.now(), createdBy:currentUser.name };
+  try{
+    const pushed=await push(ref(db,'gmp_data/inspectOut'), rec);
+    await update(ref(db,'gmp_data/outbound/'+ob._id), { inspectOutStatus:'done', inspectOutId:pushed.key, inspectOutOverall:overall });
+    logAudit('등록','출고검사성적서 '+docNo+' ('+ob.product+'/'+ob.lotNo+') '+(overall==='pass'?'합격':'불합격'));
+    toast('출고검사성적서 저장 완료'); navTo('ledger');
+  }catch(e){ toast('저장 실패: '+e.message); }
+}
+
+function buildInspectOutHtml(r){
+  const cols=(r.method==='full')?1:(r.sampleSize||8);
+  let colHead=''; for(let i=0;i<cols;i++){ colHead+='<th>'+(r.method==='full'?'전수':(i+1))+'</th>'; }
+  function cells(result){ let c=''; const pass=result==='pass'; for(let i=0;i<cols;i++){ c+='<td class="rc">'+(pass?'<b>■</b>적합<br>□부적합':'□적합<br><b>■</b>부적합')+'</td>'; } return c; }
+  const groups={}; (r.items||[]).forEach(it=>{ (groups[it.group]=groups[it.group]||[]).push(it); });
+  let rows=''; Object.keys(groups).forEach(g=>{ const arr=groups[g]; arr.forEach((it,i)=>{ rows+='<tr>'; if(i===0) rows+='<td class="g" rowspan="'+arr.length+'">'+escHtml(g)+'</td>'; rows+='<td class="std">'+escHtml(it.std)+'</td><td class="m">육안검사</td>'+cells(it.result)+'</tr>'; }); });
+  const overall=r.overall==='pass';
+  const methodLine=r.method==='full'?'■ 전수검사':'■ 샘플링검사 (KS Q ISO 2859-1) · 특별검사수준 S-2 · 보통검사 1회 · AQL 1.0 · 시료문자 '+escHtml(r.sampleCode)+' · 샘플크기 '+escHtml(r.sampleSize)+' · Ac '+escHtml(r.ac)+' · Re '+escHtml(r.re);
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>'+escHtml(r.docNo)+'</title><style>'+
+    '@page{size:A4;margin:14mm} *{box-sizing:border-box} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:12px} .wrap{max-width:720px;margin:0 auto}'+
+    'h1{text-align:center;font-size:20px;margin:0 0 16px;letter-spacing:8px} table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:5px 6px;vertical-align:middle}'+
+    '.hdr{position:relative;min-height:74px;margin-bottom:6px} .hdrbox{position:absolute;right:0;top:0;width:210px} .hdrbox td{font-size:11px} .lbl{background:#f2f2f2;font-weight:600;white-space:nowrap}'+
+    '.grid th{background:#f2f2f2;font-size:11px} .grid td{font-size:11px;text-align:center} .grid .std{text-align:left} .g{font-weight:600;text-align:center;white-space:nowrap} .rc{font-size:9px;line-height:1.25}'+
+    '.center{text-align:center;margin:16px 0 6px;font-weight:600} .sign{display:flex;justify-content:space-around;align-items:flex-end;margin-top:10px} .sign img{height:46px;margin-left:8px;vertical-align:bottom}'+
+    '.foot{display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#333}'+
+    '</style></head><body><div class="wrap">'+
+    '<div class="hdr"><h1>출고검사성적서</h1><table class="hdrbox"><tr><td class="lbl">문서번호</td><td>'+escHtml(r.docNo)+'</td></tr><tr><td class="lbl">개정번호</td><td>(1)</td></tr><tr><td class="lbl">개정일자</td><td>2013.04.08</td></tr></table></div>'+
+    '<table><tr><td class="lbl">제조업체명</td><td>'+escHtml(r.maker)+'</td><td class="lbl">출고처</td><td>'+escHtml(r.dest)+'</td></tr>'+
+    '<tr><td class="lbl">품목명</td><td>'+escHtml(r.product)+'</td><td class="lbl">형 명(모델명)</td><td>'+escHtml(r.model)+'</td></tr>'+
+    '<tr><td class="lbl">Lot No.</td><td>'+escHtml(r.lotNo)+'</td><td class="lbl">출고일</td><td>'+escHtml(r.outDate)+'</td></tr>'+
+    '<tr><td class="lbl">Sterilization batch No.</td><td>'+escHtml(r.sterilBatchNo)+'</td><td class="lbl">수량</td><td>'+Number(r.qty||0).toLocaleString()+' EA</td></tr></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:70px">검사방식</td><td>'+methodLine+'</td></tr></table>'+
+    '<table class="grid" style="margin-top:8px"><thead><tr><th rowspan="2" style="width:96px">검사사항</th><th rowspan="2">시험기준</th><th rowspan="2" style="width:62px">시험방법</th><th colspan="'+cols+'">결과 및 시료번호</th></tr><tr>'+colHead+'</tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:50px">비 고</td><td>'+escHtml(r.remark)+'</td><td class="lbl" style="width:70px">종합판정</td><td style="width:130px;text-align:center">'+(overall?'<b>■</b>합격 □불합격':'□합격 <b>■</b>불합격')+'</td></tr></table>'+
+    '<div class="center">검사결과는 상기와 같음.</div>'+
+    '<div class="sign"><div>검사일 : '+escHtml(r.inspectDate)+'</div><div>검사자 : '+escHtml(r.inspector)+(r.signature?'<img src="'+r.signature+'">':'')+'</div></div>'+
+    '<div class="foot"><div>(주)에이엠티코리아</div><div>'+escHtml(r.docNo)+'</div></div>'+
+    '</div></body></html>';
+}
+function printInspectOut(rec){
+  const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
+  w.document.open(); w.document.write(buildInspectOutHtml(rec)); w.document.close(); w.focus();
+  setTimeout(()=>{ try{ w.print(); }catch(_){} }, 450);
+  logAudit('PDF출력','출고검사성적서 PDF 출력: '+rec.docNo);
+}
+async function openInspectOutPdf(ob){
+  if(!ob||!ob.inspectOutId){ toast('성적서를 찾을 수 없습니다'); return; }
+  const rec=(await get(ref(db,'gmp_data/inspectOut/'+ob.inspectOutId))).val();
+  if(!rec){ toast('성적서 기록이 없습니다'); return; }
+  printInspectOut(Object.assign({_id:ob.inspectOutId}, rec));
+}
+function renderInsOutList(){
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">출고검사성적서 (AMT-OP-301)</div></div><div id="insOutTable"><div class="empty">불러오는 중...</div></div></div>';
+  const r=ref(db,'gmp_data/inspectOut');
+  const cb=onValue(r,(snap)=>{
+    const val=snap.val()||{};
+    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    if(!rows.length){ $('insOutTable').innerHTML='<div class="empty">아직 작성된 출고검사성적서가 없습니다. (입출고관리대장 → 출고 기록에서 “출고검사 작성”)</div>'; return; }
+    rows.sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
+    let html='<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
+    rows.forEach(x=>{ const ov=x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'; html+='<tr><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button></div></td></tr>'; });
+    html+='</tbody></table>';
+    const wrap=$('insOutTable'); wrap.innerHTML=html;
+    wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectOut(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
+  },(err)=>{ $('insOutTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
 }
 
