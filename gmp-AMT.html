@@ -257,6 +257,7 @@ const MENUS = [
   {id:'ledger', label:'입출고관리대장',  ready:true},
   {id:'insIn',  label:'입고검사성적서',  ready:true},
   {id:'insOut', label:'출고검사성적서',  ready:true},
+  {id:'ncr',    label:'부적합품 관리',    ready:true},
   {id:'files',  label:'첨부파일관리',    ready:true},
   {id:'trace',  label:'LOT 추적조회',    ready:true},
   {id:'audit',  label:'Audit Trail',     ready:true},
@@ -291,6 +292,7 @@ function navTo(id){
   else if(id==='ledger')   renderLedger();
   else if(id==='insIn')    renderInsInList();
   else if(id==='insOut')   renderInsOutList();
+  else if(id==='ncr')      renderNcr();
   else if(id==='files')    renderFiles();
   else if(id==='trace')    renderTrace();
   else if(id==='audit')    renderAudit();
@@ -659,7 +661,7 @@ function openLotModal(p){
 }
 
 /* ════════ 출고 (내부거래 AMT→KY 자동연동) — 2-D-1 ════════ */
-let ledgerLots=[], ledgerOut=[], ignoredTrades=new Set();
+let ledgerLots=[], ledgerOut=[], ledgerNcr=[], ignoredTrades=new Set();
 function snapArr(snap){ const v=snap.val()||{}; return Object.keys(v).map(k=>Object.assign({_id:k},v[k])); }
 function igKey(id, product){ return String(id+'_'+product).replace(/[^a-zA-Z0-9]/g,'_'); }
 async function ignoreTrade(r){
@@ -704,10 +706,11 @@ async function renderLedger(){
   ['lg_model','lg_lot','lg_from','lg_to'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input',drawLedgerTable); });
   if($('lg_print')) $('lg_print').addEventListener('click',printLedger);
 
-  const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound');
+  const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound'); const rNcr=ref(db,'gmp_data/nonconformities');
   const cbL=onValue(rLots,(s)=>{ ledgerLots=snapArr(s); redrawLedger(); });
   const cbO=onValue(rOut,(s)=>{ ledgerOut=snapArr(s); redrawLedger(); });
-  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); };
+  const cbN=onValue(rNcr,(s)=>{ ledgerNcr=snapArr(s); redrawLedger(); });
+  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); off(rNcr,'value',cbN); };
 }
 function redrawLedger(){ drawOutPending(); drawOutboundList(); drawLedgerTable(); }
 
@@ -718,10 +721,14 @@ function ledgerRows(){
   lots.forEach(l=>{
     if(!(l.inspectInStatus==='done' && l.inspectInOverall==='pass')) return; // 입고검사 합격 LOT만
     let bal=Number(l.initialQty)||0;
-    out.push({ kind:'in', model:l.model||l.product, lot:l.lotNo, inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, bal });
-    const outs = ledgerOut.filter(o=> o.lotId===l._id && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
-      .sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || Number(a.createdAt||0)-Number(b.createdAt||0));
-    outs.forEach(o=>{ bal -= Number(o.qty)||0; out.push({ kind:'out', model:o.model||l.model||o.product, lot:l.lotNo, outDate:o.date, outQty:Number(o.qty)||0, dest:o.dest||'KY 메디칼', bal }); });
+    out.push({ kind:'in', model:l.model||l.product, lot:l.lotNo, date:l.inDate||l.prodDate||'', inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, bal });
+    const evs=[];
+    ledgerOut.filter(o=> o.lotId===l._id && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
+      .forEach(o=>evs.push({ kind:'out', model:o.model||l.model||o.product, date:o.date||'', ord:Number(o.createdAt||0), qty:Number(o.qty)||0, dest:o.dest||'KY 메디칼' }));
+    ledgerNcr.filter(n=> n.lotId===l._id && Number(n.qtyDeducted)>0)
+      .forEach(n=>evs.push({ kind:'ncr', model:n.model||l.model||n.product, date:n.reportDate||'', ord:Number(n.createdAt||0), qty:Number(n.qtyDeducted)||0, disposition:n.disposition||'폐기', desc:n.defectDesc||'' }));
+    evs.sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || (a.ord-b.ord));
+    evs.forEach(e=>{ bal -= Number(e.qty)||0; e.lot=l.lotNo; e.bal=bal; out.push(e); });
   });
   return out;
 }
@@ -733,30 +740,43 @@ function ledgerFiltered(){
   const fTo=($('lg_to')&&$('lg_to').value)||'';
   if(fModel) rows=rows.filter(r=>String(r.model)===fModel);
   if(fLot) rows=rows.filter(r=>String(r.lot||'').toLowerCase().includes(fLot));
-  if(fFrom||fTo){ rows=rows.filter(r=>{ const d=r.kind==='in'?r.inDate:r.outDate; if(!d) return false; if(fFrom&&d<fFrom) return false; if(fTo&&d>fTo) return false; return true; }); }
+  if(fFrom||fTo){ rows=rows.filter(r=>{ const d=r.date||''; if(!d) return false; if(fFrom&&d<fFrom) return false; if(fTo&&d>fTo) return false; return true; }); }
   return rows;
+}
+function ledgerCells(r){
+  const isIn=r.kind==='in', isOut=r.kind==='out', isNcr=r.kind==='ncr';
+  const scrap = (isNcr && r.disposition==='폐기') ? r.qty : null;
+  let qc, bigo='';
+  if(isNcr){ const dp=r.disposition||'폐기'; qc='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(dp)+'</span>'; bigo=(dp==='폐기'?(r.date+(r.desc?(' · '+r.desc):'')):(dp+' '+r.qty+(r.desc?(' · '+r.desc):''))); }
+  else qc='<span class="pill green">합격</span>';
+  return {
+    inDate: isIn?(r.inDate||''):'', inQty: isIn?r.inQty:null,
+    outDate: isOut?(r.date||''):'', outQty: isOut?r.qty:null,
+    scrap, dest: isOut?(r.dest||''):'', qc, bigo,
+    bg: isIn?'#ffffff':(isOut?'#f3f8ff':'#fff5f5')
+  };
 }
 function drawLedgerTable(){
   const el=$('ledgerTable'); if(!el) return;
   const rows=ledgerFiltered();
   if(!rows.length){ el.innerHTML='<div class="empty">검사 합격된 입출고 건이 없습니다. (입고검사·출고검사 합격 시 표시)</div>'; return; }
-  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-OP-601 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격 건만 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-OP-601 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
   html+='<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
   rows.forEach((r,i)=>{
-    const isIn=r.kind==='in'; const bg=isIn?'#ffffff':'#f3f8ff';
-    html+='<tr style="background:'+bg+'">'+
+    const c=ledgerCells(r);
+    html+='<tr style="background:'+c.bg+'">'+
       '<td>'+(i+1)+'</td>'+
       '<td><b>'+escHtml(r.model)+'</b></td>'+
       '<td>'+escHtml(r.lot)+'</td>'+
-      '<td>'+(isIn?escHtml(r.inDate):'')+'</td>'+
-      '<td style="text-align:right">'+(isIn?fmt(r.inQty):'')+'</td>'+
-      '<td>'+(isIn?'':escHtml(r.outDate))+'</td>'+
-      '<td style="text-align:right">'+(isIn?'':fmt(r.outQty))+'</td>'+
-      '<td style="text-align:right"></td>'+
+      '<td>'+escHtml(c.inDate)+'</td>'+
+      '<td style="text-align:right">'+(c.inQty!=null?fmt(c.inQty):'')+'</td>'+
+      '<td>'+escHtml(c.outDate)+'</td>'+
+      '<td style="text-align:right">'+(c.outQty!=null?fmt(c.outQty):'')+'</td>'+
+      '<td style="text-align:right;color:#dc2626">'+(c.scrap!=null?fmt(c.scrap):'')+'</td>'+
       '<td style="text-align:right"><b>'+fmt(r.bal)+'</b></td>'+
-      '<td>'+(isIn?'':escHtml(r.dest))+'</td>'+
-      '<td><span class="pill green">합격</span></td>'+
-      '<td></td>'+
+      '<td>'+escHtml(c.dest)+'</td>'+
+      '<td>'+c.qc+'</td>'+
+      '<td>'+escHtml(c.bigo)+'</td>'+
       '</tr>';
   });
   html+='</tbody></table>';
@@ -764,15 +784,15 @@ function drawLedgerTable(){
 }
 function printLedger(){
   const rows=ledgerFiltered();
-  if(!rows.length){ toast('인쇄할 합격 건이 없습니다'); return; }
+  if(!rows.length){ toast('인쇄할 건이 없습니다'); return; }
   let body='';
-  rows.forEach((r,i)=>{ const isIn=r.kind==='in';
+  rows.forEach((r,i)=>{ const c=ledgerCells(r);
     body+='<tr>'+
       '<td>'+(i+1)+'</td><td>'+escHtml(r.model)+'</td><td>'+escHtml(r.lot)+'</td>'+
-      '<td>'+(isIn?escHtml(r.inDate):'')+'</td><td class="r">'+(isIn?Number(r.inQty).toLocaleString():'')+'</td>'+
-      '<td>'+(isIn?'':escHtml(r.outDate))+'</td><td class="r">'+(isIn?'':Number(r.outQty).toLocaleString())+'</td>'+
-      '<td class="r"></td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
-      '<td>'+(isIn?'':escHtml(r.dest))+'</td><td>합격</td><td></td></tr>';
+      '<td>'+escHtml(c.inDate)+'</td><td class="r">'+(c.inQty!=null?Number(c.inQty).toLocaleString():'')+'</td>'+
+      '<td>'+escHtml(c.outDate)+'</td><td class="r">'+(c.outQty!=null?Number(c.outQty).toLocaleString():'')+'</td>'+
+      '<td class="r">'+(c.scrap!=null?Number(c.scrap).toLocaleString():'')+'</td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
+      '<td>'+escHtml(c.dest)+'</td><td>'+(r.kind==='ncr'?escHtml(r.disposition||'폐기'):'합격')+'</td><td>'+escHtml(c.bigo)+'</td></tr>';
   });
   const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
   w.document.open();
@@ -780,7 +800,7 @@ function printLedger(){
     '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
     'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right}'+
     '.foot{margin-top:14px;text-align:right;font-size:11px}'+
-    '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-OP-601 · (주)에이엠티코리아 · 검사 합격 건만 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
+    '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-OP-601 · (주)에이엠티코리아 · 검사 합격·부적합 처리 건 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
     '<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
     '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
@@ -1369,6 +1389,134 @@ async function delAttachment(cfg, lot, att){
     logAudit('첨부삭제','파일 삭제: '+lot.product+'/'+lot.lotNo+' · '+att.name);
     toast('삭제되었습니다');
   }catch(e){ toast('삭제 실패: '+e.message); }
+}
+
+/* ════════ 부적합품 관리 (AMT-OP-501) ════════ */
+async function nextNcrDocNo(dateStr){
+  const ym=(dateStr||new Date().toISOString().slice(0,10)).slice(0,7).replace('-','');
+  const all=(await get(ref(db,'gmp_data/nonconformities'))).val()||{};
+  let max=0; const re=new RegExp('^DMF501-00-'+ym+'-(\\d+)$');
+  Object.values(all).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } });
+  return 'DMF501-00-'+ym+'-'+String(max+1).padStart(3,'0');
+}
+function renderNcr(){
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">부적합품 관리 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-OP-501</span></div><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" id="nc_new">부적합품 등록</button>':'')+'<button class="btn btn-ghost btn-sm" id="nc_print">🖨 대장 인쇄</button></div></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">부적합품관리대장 (DMF501-01). 처리구분: 반품·특채·선별·폐기. 폐기·반품·선별은 재고 차감, 특채(사용)는 유지됩니다.</div>'+
+    '<div id="ncTable"><div class="empty">불러오는 중...</div></div></div>';
+  if($('nc_new')) $('nc_new').addEventListener('click',()=>renderNcrForm());
+  if($('nc_print')) $('nc_print').addEventListener('click',printNcrLedger);
+  const r=ref(db,'gmp_data/nonconformities');
+  const cb=onValue(r,(snap)=>{
+    const v=snap.val()||{}; const rows=Object.keys(v).map(k=>Object.assign({_id:k},v[k])).sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
+    if(!rows.length){ $('ncTable').innerHTML='<div class="empty">등록된 부적합품이 없습니다.</div>'; return; }
+    let html='<table><thead><tr><th>보고서번호</th><th>발견일</th><th>제품</th><th>LOT</th><th>수량</th><th>등급</th><th>부적합내용</th><th>처리</th><th>차감</th><th></th></tr></thead><tbody>';
+    rows.forEach(x=>{ const dp='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(x.disposition||'')+'</span>'; html+='<tr><td>'+escHtml(x.docNo)+'</td><td>'+escHtml(x.reportDate)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.lotNo)+'</td><td style="text-align:right">'+fmt(x.qty)+'</td><td>'+escHtml(x.defectGrade||'')+'</td><td>'+escHtml(x.defectDesc||'')+'</td><td>'+dp+'</td><td style="text-align:right;color:#dc2626">'+fmt(x.qtyDeducted||0)+'</td><td><button class="btn btn-ghost btn-sm" data-ncpdf="'+escHtml(x._id)+'">보고서</button></td></tr>'; });
+    html+='</tbody></table>';
+    const w=$('ncTable'); w.innerHTML=html;
+    w.querySelectorAll('[data-ncpdf]').forEach(b=>b.addEventListener('click',()=>printNcrReport(rows.find(z=>z._id===b.getAttribute('data-ncpdf')))));
+  },(err)=>{ $('ncTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  usersUnsub=()=>off(r,'value',cb);
+}
+async function renderNcrForm(){
+  if(productsUnsub){ productsUnsub(); productsUnsub=null; }
+  if(usersUnsub){ usersUnsub(); usersUnsub=null; }
+  let lots=[];
+  try{ const lv=(await get(ref(db,'gmp_data/lots'))).val()||{}; lots=Object.keys(lv).map(k=>Object.assign({_id:k},lv[k])).filter(l=>Number(l.currentQty)>0).sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))); }catch(_){}
+  try{ const pv=(await get(ref(db,'gmp_data/products'))).val()||{}; prodMap={}; Object.keys(pv).forEach(k=>{const p=Object.assign({_id:k},pv[k]); prodMap[p.name]=p;}); }catch(_){}
+  let opts='<option value="">— LOT 선택 —</option>';
+  lots.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+' (현재고 '+fmt(l.currentQty)+')</option>'; });
+  const today=new Date().toISOString().slice(0,10);
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">부적합품 등록 (DMF501-00)</div><button class="btn btn-ghost btn-sm" id="nc_back">← 목록으로</button></div>'+
+    '<div class="field" style="max-width:480px"><label>LOT</label><select id="nc_lot">'+opts+'</select></div>'+
+    '<div style="display:flex;gap:14px;flex-wrap:wrap"><div class="field" style="flex:1;min-width:140px"><label>부적합 수량</label><input id="nc_qty" type="number" min="1" placeholder="개수"></div>'+
+    '<div class="field" style="flex:1;min-width:180px"><label>결함등급</label><div style="display:flex;gap:14px;padding-top:8px"><label class="chk"><input type="radio" name="nc_grade" value="중결함" checked> 중결함</label><label class="chk"><input type="radio" name="nc_grade" value="경결함"> 경결함</label></div></div></div>'+
+    '<div class="field"><label>부적합 내용</label><input id="nc_desc" placeholder="예: 포장 파손 / 유통기한 만료 / 외관 오염 등"></div>'+
+    '<div class="field"><label>발생 원인 (선택)</label><input id="nc_cause" placeholder="예: 운송 중 손상 / 제조사 / 장기보관 등"></div>'+
+    '<div class="field"><label>처리구분</label><div style="display:flex;gap:16px;flex-wrap:wrap;padding-top:4px">'+
+      '<label class="chk"><input type="radio" name="nc_disp" value="폐기" checked> 폐기(재고차감)</label>'+
+      '<label class="chk"><input type="radio" name="nc_disp" value="반품"> 반품(재고차감)</label>'+
+      '<label class="chk"><input type="radio" name="nc_disp" value="선별"> 선별(부적합분 차감)</label>'+
+      '<label class="chk"><input type="radio" name="nc_disp" value="특채"> 특채/사용(재고유지)</label></div></div>'+
+    '<div class="field"><label>처리 방법 (선택)</label><input id="nc_method" placeholder="예: 위탁폐기 / 소각 / 원판매자 반품 등"></div>'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap"><div class="field" style="flex:1;min-width:180px"><label>발견(처리)일</label><input id="nc_date" type="date" value="'+today+'"></div>'+
+    '<div class="field" style="flex:1;min-width:180px"><label>품질책임자</label><input id="nc_inspector" value="강승섭"></div></div>'+
+    '<div class="field"><label>품질책임자 전자서명</label><canvas id="nc_sign" width="600" height="160" style="width:100%;max-width:600px;height:160px;border:1px dashed var(--line);border-radius:8px;background:#fff;touch-action:none"></canvas><div style="margin-top:6px"><button class="btn btn-ghost btn-sm" id="nc_clear">서명 지우기</button></div></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="nc_cancel">취소</button><button class="btn" id="nc_save">저장 및 서명완료</button></div></div>';
+  const sig=setupSignature($('nc_sign'));
+  $('nc_clear').addEventListener('click',()=>sig.clear());
+  $('nc_back').addEventListener('click',()=>navTo('ncr'));
+  $('nc_cancel').addEventListener('click',()=>navTo('ncr'));
+  $('nc_save').addEventListener('click',()=>saveNcr(lots, sig));
+}
+async function saveNcr(lots, sig){
+  const lotId=$('nc_lot').value; const lot=(lots||[]).find(x=>x._id===lotId);
+  if(!lot){ toast('LOT를 선택하세요'); return; }
+  const qty=parseInt($('nc_qty').value,10)||0;
+  if(qty<=0){ toast('부적합 수량을 입력하세요'); return; }
+  const grade=(document.querySelector('input[name=nc_grade]:checked')||{}).value||'중결함';
+  const disposition=(document.querySelector('input[name=nc_disp]:checked')||{}).value||'폐기';
+  const desc=($('nc_desc').value||'').trim();
+  const cause=($('nc_cause').value||'').trim();
+  const method=($('nc_method').value||'').trim();
+  const reportDate=$('nc_date').value||new Date().toISOString().slice(0,10);
+  const inspector=($('nc_inspector').value||'강승섭').trim();
+  if(!desc){ toast('부적합 내용을 입력하세요'); return; }
+  if(sig.isEmpty()){ toast('품질책임자 서명을 해주세요'); return; }
+  const deduct=(disposition==='특채')?0:qty;
+  const cur=Number(lot.currentQty)||0;
+  if(deduct>cur){ toast('현재고('+fmt(cur)+')보다 많이 처리할 수 없습니다'); return; }
+  let docNo; try{ docNo=await nextNcrDocNo(reportDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
+  const rec={ docNo, lotId:lot._id, product:lot.product, model:lot.model||'', lotNo:lot.lotNo, maker:(prodMap[lot.product]||{}).maker||'',
+    qty, defectGrade:grade, defectDesc:desc, cause, disposition, dispositionMethod:method, qtyDeducted:deduct,
+    reportDate, inspector, signature:sig.dataUrl(), createdAt:Date.now(), createdBy:currentUser.name };
+  try{
+    await push(ref(db,'gmp_data/nonconformities'), rec);
+    if(deduct>0){ await update(ref(db,'gmp_data/lots/'+lot._id), { currentQty: cur-deduct }); }
+    logAudit('부적합','부적합품 '+docNo+' ('+lot.product+'/'+lot.lotNo+') '+disposition+' '+fmt(deduct)+'개');
+    toast('부적합품 보고서 저장 완료'); navTo('ncr');
+  }catch(e){ toast('저장 실패: '+e.message); }
+}
+function buildNcrReportHtml(r){
+  function chk(v,t){ return (v===t?'■':'□')+t; }
+  const grade=r.defectGrade||'', disp=r.disposition||'';
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>'+escHtml(r.docNo)+'</title><style>'+
+    '@page{size:A4;margin:16mm} *{box-sizing:border-box} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:12px} .wrap{max-width:720px;margin:0 auto}'+
+    'h1{text-align:center;font-size:20px;margin:0 0 16px;letter-spacing:6px;font-weight:800} table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:6px 8px;vertical-align:middle}'+
+    '.hdr{position:relative;min-height:78px;margin-bottom:8px} .hdrbox{position:absolute;right:0;top:0;width:232px} .hdrbox td{font-size:11px;padding:4px 6px} .lbl{background:#f4f4f4;font-weight:600;white-space:nowrap;text-align:center}'+
+    '.big td{height:64px;vertical-align:top} .sign{display:flex;justify-content:flex-end;gap:50px;align-items:flex-end;margin-top:24px} .sign img{height:46px;margin-left:10px;vertical-align:bottom}'+
+    '.foot{display:flex;justify-content:space-between;margin-top:28px;padding-top:6px;border-top:2px solid #1f3a5f;font-size:11px;color:#333}'+
+    '</style></head><body><div class="wrap">'+
+    '<div class="hdr"><h1>부적합품 보고서</h1><table class="hdrbox"><tr><td class="lbl">문서번호</td><td style="text-align:center">'+escHtml(r.docNo)+'</td></tr><tr><td class="lbl">양식번호</td><td style="text-align:center">DMF501-00</td></tr><tr><td class="lbl">제·개정일자</td><td style="text-align:center">2013.04.08</td></tr></table></div>'+
+    '<table><tr><td class="lbl" style="width:96px">제조업체명</td><td>'+escHtml(r.maker||'')+'</td><td class="lbl" style="width:96px">발견(처리)일</td><td>'+fmtKDate(r.reportDate)+'</td></tr>'+
+    '<tr><td class="lbl">품목명</td><td>'+escHtml(r.product)+'</td><td class="lbl">모델명</td><td>'+escHtml(r.model||'')+'</td></tr>'+
+    '<tr><td class="lbl">Lot No.</td><td>'+escHtml(r.lotNo)+'</td><td class="lbl">부적합 수량</td><td>'+Number(r.qty||0).toLocaleString()+' EA</td></tr>'+
+    '<tr><td class="lbl">결함등급</td><td>'+chk(grade,'중결함')+' &nbsp;&nbsp; '+chk(grade,'경결함')+'</td><td class="lbl">검사자</td><td>'+escHtml(r.inspector||'')+'</td></tr></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:96px">부적합 내용</td></tr></table>'+
+    '<table style="border-top:none;margin-top:-1px"><tr class="big"><td>'+escHtml(r.defectDesc||'')+'</td></tr></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:96px">발생 원인</td><td>'+escHtml(r.cause||'')+'</td></tr></table>'+
+    '<table style="margin-top:8px"><tr><td class="lbl" style="width:96px">처리 구분</td><td>'+chk(disp,'반품')+' &nbsp; '+chk(disp,'특채')+'(사용) &nbsp; '+chk(disp,'선별')+' &nbsp; '+chk(disp,'폐기')+'</td></tr>'+
+    '<tr><td class="lbl">처리 수량</td><td>'+Number(r.qtyDeducted||0).toLocaleString()+' EA &nbsp; '+(r.disposition==='특채'?'(재고 유지)':'(재고 차감)')+'</td></tr>'+
+    '<tr><td class="lbl">처리 방법</td><td>'+escHtml(r.dispositionMethod||'')+'</td></tr></table>'+
+    '<div style="text-align:center;margin:18px 0 6px;font-weight:600">상기 부적합품을 절차에 따라 처리하였음을 확인함.</div>'+
+    '<div class="sign"><div>처리일 : '+fmtKDate(r.reportDate)+'</div><div>품질책임자 : '+escHtml(r.inspector||'')+(r.signature?'<img src="'+r.signature+'">':'')+'</div></div>'+
+    '<div class="foot"><div>(주)에이엠티코리아</div><div>F401-1</div></div>'+
+    '</div></body></html>';
+}
+function printNcrReport(rec){ if(!rec) return; const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; } w.document.open(); w.document.write(buildNcrReportHtml(rec)); w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },420); logAudit('PDF출력','부적합품보고서 PDF: '+rec.docNo); }
+async function printNcrLedger(){
+  let rows=[]; try{ const v=(await get(ref(db,'gmp_data/nonconformities'))).val()||{}; rows=Object.values(v).sort((a,b)=>String(a.docNo||'').localeCompare(String(b.docNo||''))); }catch(_){}
+  if(!rows.length){ toast('인쇄할 부적합품이 없습니다'); return; }
+  let body=''; rows.forEach((r,i)=>{ body+='<tr><td>'+(i+1)+'</td><td>'+escHtml(r.docNo)+'</td><td>'+escHtml(r.reportDate)+'</td><td>'+escHtml(r.product)+'</td><td>'+escHtml(r.lotNo)+'</td><td class="r">'+Number(r.qty||0).toLocaleString()+'</td><td>'+escHtml(r.defectGrade||'')+'</td><td>'+escHtml(r.defectDesc||'')+'</td><td>'+escHtml(r.disposition||'')+'</td><td class="r">'+Number(r.qtyDeducted||0).toLocaleString()+'</td><td>'+escHtml(r.inspector||'')+'</td></tr>'; });
+  const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>부적합품관리대장 DMF501-01</title><style>'+
+    '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
+    'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right} .foot{margin-top:14px;text-align:right;font-size:11px}'+
+    '</style></head><body><h1>부적합품관리대장</h1><div class="sub">DMF501-01 · (주)에이엠티코리아 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
+    '<table><thead><tr><th>No</th><th>보고서번호</th><th>발견일</th><th>제품</th><th>LOT</th><th>수량</th><th>등급</th><th>부적합내용</th><th>처리구분</th><th>차감수량</th><th>품질책임자</th></tr></thead><tbody>'+body+'</tbody></table>'+
+    '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
+  logAudit('PDF출력','부적합품관리대장 인쇄 ('+rows.length+'행)');
 }
 
 /* ── 설정: 사용자관리 ── */
