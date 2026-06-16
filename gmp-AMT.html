@@ -254,7 +254,7 @@ const MENUS = [
   {id:'dash',   label:'대시보드',        ready:false},
   {id:'prod',   label:'제품관리',        ready:true},
   {id:'lot',    label:'LOT 관리 · 입고',  ready:true},
-  {id:'ledger', label:'입출고관리대장',  ready:false},
+  {id:'ledger', label:'입출고관리대장',  ready:true},
   {id:'insIn',  label:'입고검사성적서',  ready:true},
   {id:'insOut', label:'출고검사성적서',  ready:false},
   {id:'files',  label:'첨부파일관리',    ready:false},
@@ -287,6 +287,7 @@ function navTo(id){
   if(usersUnsub){ usersUnsub(); usersUnsub=null; }
   if(id==='prod')          renderProducts();
   else if(id==='lot')      renderLot();
+  else if(id==='ledger')   renderLedger();
   else if(id==='insIn')    renderInsInList();
   else if(id==='settings') renderSettings();
   else renderPlaceholder(m?m.label:'');
@@ -610,6 +611,120 @@ function openLotModal(p){
       toast('LOT가 등록되었습니다'); m.remove();
     }catch(e){ toast('저장 실패: '+e.message); }
   });
+}
+
+/* ════════ 출고 (내부거래 AMT→KY 자동연동) — 2-D-1 ════════ */
+let ledgerLots=[], ledgerOut=[];
+function snapArr(snap){ const v=snap.val()||{}; return Object.keys(v).map(k=>Object.assign({_id:k},v[k])); }
+
+async function renderLedger(){
+  $('page').innerHTML='<div class="card"><div class="empty">운영앱(AMT) 연결 중...</div></div>';
+  await connectAmtKy();
+  const pv=(await get(ref(db,'gmp_data/products'))).val()||{};
+  prodMap={}; Object.keys(pv).forEach(k=>{ const p=Object.assign({_id:k},pv[k]); prodMap[p.name]=p; });
+
+  let banner='';
+  if(amtKy.status==='ok') banner='<div class="banner ok">✅ 운영앱(AMT) 연결됨 · 내부거래(AMT→KY) <b>'+amtKy.internalTrades.length+'</b>건</div>';
+  else if(amtKy.status==='noaccess') banner='<div class="banner warn">⚠️ 운영앱 접근 권한 없음. 출고 자동연동은 운영앱 관리자(유경호 등)만 가능합니다.</div>';
+  else banner='<div class="banner bad">❌ 운영앱 연결 실패: '+escHtml(amtKy.err)+'</div>';
+
+  $('page').innerHTML = banner +
+    '<div class="card"><div class="card-h"><div class="t">출고 대기 (내부거래 AMT→KY 자동연동)</div></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 “AMT→KY 물품공급” 건입니다. 출고처는 KY 메디칼 고정, MEDIAS는 T·WTP로 나뉩니다. “출고 처리”에서 LOT는 유통기한 임박순(선입선출)으로 자동 배정됩니다.</div>'+
+    '<div id="outPending"></div></div>'+
+    '<div class="card"><div class="card-h"><div class="t">출고 기록</div></div><div id="outList"></div></div>';
+
+  const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound');
+  const cbL=onValue(rLots,(s)=>{ ledgerLots=snapArr(s); redrawLedger(); });
+  const cbO=onValue(rOut,(s)=>{ ledgerOut=snapArr(s); redrawLedger(); });
+  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); };
+}
+function redrawLedger(){ drawOutPending(); drawOutboundList(); }
+
+function drawOutPending(){
+  const el=$('outPending'); if(!el) return;
+  if(amtKy.status!=='ok'){ el.innerHTML='<div class="empty">운영앱 연결 시 내부거래가 표시됩니다.</div>'; return; }
+  const done=new Set(ledgerOut.map(o=>String(o.srcTradeId)+'|'+o.product));
+  const trades=amtKy.internalTrades.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  const rows=[];
+  trades.forEach(t=>{ gmpProductsFor(t.product).forEach(gp=>{ if(!done.has(String(t.id)+'|'+gp)) rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
+  if(!rows.length){ el.innerHTML='<div class="empty">대기 중인 출고 건이 없습니다. (모두 처리됨)</div>'; return; }
+  let html='<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
+  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
+  html+='</tbody></table>';
+  el.innerHTML=html;
+  if(canWrite()) el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(rows[parseInt(b.getAttribute('data-out'),10)])));
+}
+
+// 유통기한 임박순(선입선출) 자동 배정
+function allocateFifo(product, qty){
+  const avail = ledgerLots.filter(l=>l.product===product && Number(l.currentQty)>0)
+    .sort((a,b)=>String(a.expiry||'').localeCompare(String(b.expiry||'')));
+  let remain=Number(qty)||0; const take={};
+  avail.forEach(l=>{ const t=Math.max(0,Math.min(remain,Number(l.currentQty))); if(t>0){ take[l._id]=t; remain-=t; } });
+  return { avail, take, remain };
+}
+
+function openOutModal(p){
+  const need=Number(p.qty)||0;
+  const a=allocateFifo(p.product, need);
+  const avail=a.avail, take=a.take;
+  const m=document.createElement('div'); m.className='modal-bg';
+  let lotRows='';
+  if(!avail.length) lotRows='<div class="empty" style="color:var(--red)">출고 가능한 재고(LOT)가 없습니다. 먼저 LOT 등록을 하세요.</div>';
+  else avail.forEach(l=>{
+    const ins = l.inspectInStatus==='done' ? (l.inspectInOverall==='fail'?'<span class="pill" style="background:#fee2e2;color:#dc2626">입고검사 불합격</span>':'<span class="pill green">입고검사 합격</span>') : '<span class="pill amber">미검사</span>';
+    lotRows += '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)">'+
+      '<div style="flex:1"><b>'+escHtml(l.lotNo)+'</b> '+ins+'<div style="color:var(--muted);font-size:11px">유통기한 '+escHtml(l.expiry)+' · 현재재고 '+fmt(l.currentQty)+'</div></div>'+
+      '<input type="number" data-lot="'+escHtml(l._id)+'" value="'+(take[l._id]||0)+'" min="0" max="'+Number(l.currentQty)+'" style="width:120px;padding:8px;border:1px solid var(--line);border-radius:7px">'+
+      '</div>';
+  });
+  m.innerHTML='<div class="modal"><h3>출고 처리 — '+escHtml(p.product)+'</h3>'+
+    '<div style="font-size:13px;margin-bottom:6px">출고처 <b>KY 메디칼</b> · 출고수량 <b>'+fmt(need)+'</b> · 거래일 '+escHtml(p.date)+'</div>'+
+    '<div style="color:var(--muted);font-size:11px;margin-bottom:10px">LOT는 유통기한 임박순으로 자동 배정됩니다. 필요시 수량을 직접 조정하세요.</div>'+
+    lotRows +
+    '<div id="out_sum" style="margin-top:10px;font-size:13px"></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="out_cancel">취소</button><button class="btn" id="out_save">출고 확정</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#out_cancel').addEventListener('click',()=>m.remove());
+  function sum(){ let s=0; m.querySelectorAll('[data-lot]').forEach(i=>s+=parseInt(i.value||'0',10)||0); return s; }
+  function refreshSum(){ const s=sum(); m.querySelector('#out_sum').innerHTML='배정 합계: <b>'+fmt(s)+'</b> / 필요: '+fmt(need)+(s===need?' <span class="pill green">일치</span>':' <span class="pill amber">불일치</span>'); }
+  m.querySelectorAll('[data-lot]').forEach(i=>i.addEventListener('input',refreshSum)); refreshSum();
+  m.querySelector('#out_save').addEventListener('click',async()=>{
+    const allocs=[]; let s=0;
+    m.querySelectorAll('[data-lot]').forEach(i=>{ const t=parseInt(i.value||'0',10)||0; if(t>0){ allocs.push({lotId:i.getAttribute('data-lot'), take:t}); s+=t; } });
+    if(s<=0){ toast('출고 수량을 배정하세요'); return; }
+    if(s!==need && !confirm('배정 합계('+fmt(s)+')가 필요수량('+fmt(need)+')과 다릅니다. 그래도 진행할까요?')) return;
+    for(const al of allocs){ const l=ledgerLots.find(x=>x._id===al.lotId); if(!l || al.take>Number(l.currentQty)){ toast('LOT 재고를 초과했습니다'); return; } }
+    const btn=m.querySelector('#out_save'); btn.disabled=true; btn.textContent='처리 중...';
+    try{
+      for(const al of allocs){
+        const l=ledgerLots.find(x=>x._id===al.lotId);
+        const rec={ srcTradeId:p.srcTradeId, opProduct:p.opProduct, product:p.product, date:p.date, qty:al.take,
+          lotId:l._id, lotNo:l.lotNo, prodDate:l.prodDate, expiry:l.expiry, dest:'KY 메디칼', tradeMemo:p.memo,
+          sterile:!!l.sterile, model:l.model||'', maker:(prodMap[p.product]||{}).maker||'',
+          inspectOutStatus:'pending', createdAt:Date.now(), createdBy:currentUser.name };
+        await push(ref(db,'gmp_data/outbound'), rec);
+        await update(ref(db,'gmp_data/lots/'+l._id), { currentQty: Number(l.currentQty)-al.take });
+      }
+      logAudit('등록','출고 처리: '+p.product+' '+fmt(s)+'개 → KY 메디칼 (LOT '+allocs.length+'건)');
+      toast('출고 처리 완료'); m.remove();
+    }catch(e){ toast('출고 실패: '+e.message); btn.disabled=false; btn.textContent='출고 확정'; }
+  });
+}
+
+function drawOutboundList(){
+  const el=$('outList'); if(!el) return;
+  if(!ledgerOut.length){ el.innerHTML='<div class="empty">출고 기록이 없습니다.</div>'; return; }
+  const rows=ledgerOut.slice().sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
+  let html='<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th></tr></thead><tbody>';
+  rows.forEach(o=>{
+    const ins=o.inspectOutStatus==='done'?'<span class="pill green">완료</span>':'<span class="pill amber">대기</span>';
+    html+='<tr><td>'+escHtml(o.date)+'</td><td><b>'+escHtml(o.product)+'</b></td><td>'+escHtml(o.lotNo)+'</td><td>'+fmt(o.qty)+'</td><td>'+escHtml(o.dest)+'</td><td>'+ins+'</td></tr>';
+  });
+  html+='</tbody></table>';
+  el.innerHTML=html;
 }
 
 /* ════════ 입고검사성적서 (2-C) ════════ */
