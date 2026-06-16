@@ -387,9 +387,12 @@ async function connectAmtKy(){
   try{
     await signInWithEmailAndPassword(authAmt, currentUser.email, amtKyPw(currentUser.email));
     const data = (await get(ref(dbAmt,'amt_data'))).val()||{};
+    const tomb = data.tombstones||{}; const tombInv=tomb.invLogs||{}; const tombInt=tomb.internalTrades||{};
     let inv = data.invLogs||[];        if(!Array.isArray(inv)) inv = Object.values(inv);
     let it  = data.internalTrades||[]; if(!Array.isArray(it))  it  = Object.values(it);
-    amtKy = { status:'ok', invLogs:inv.filter(Boolean), internalTrades:it.filter(Boolean), err:'' };
+    inv = inv.filter(x=> x && !tombInv[x.id]);   // 운영앱에서 삭제(tombstone)된 수입 제외
+    it  = it.filter(x=> x && !tombInt[x.id]);    // 삭제된 내부거래 제외
+    amtKy = { status:'ok', invLogs:inv, internalTrades:it, err:'' };
   }catch(e){
     const code=e.code||'';
     if(code.includes('invalid-credential')||code.includes('wrong-password')||code.includes('user-not-found'))
@@ -647,7 +650,7 @@ function drawOutPending(){
   const done=new Set(ledgerOut.map(o=>String(o.srcTradeId)+'|'+o.product));
   const trades=amtKy.internalTrades.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
   const rows=[];
-  trades.forEach(t=>{ gmpProductsFor(t.product).forEach(gp=>{ if(!done.has(String(t.id)+'|'+gp)) rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
+  trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(!done.has(String(t.id)+'|'+gp)) rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
   if(!rows.length){ el.innerHTML='<div class="empty">대기 중인 출고 건이 없습니다. (모두 처리됨)</div>'; return; }
   let html='<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
   rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
