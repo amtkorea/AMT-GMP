@@ -257,7 +257,7 @@ const MENUS = [
   {id:'ledger', label:'입출고관리대장',  ready:true},
   {id:'insIn',  label:'입고검사성적서',  ready:true},
   {id:'insOut', label:'출고검사성적서',  ready:true},
-  {id:'files',  label:'첨부파일관리',    ready:false},
+  {id:'files',  label:'첨부파일관리',    ready:true},
   {id:'trace',  label:'LOT 추적조회',    ready:true},
   {id:'audit',  label:'Audit Trail',     ready:true},
   {id:'settings',label:'설정(사용자관리)',ready:true, superOnly:true}
@@ -291,6 +291,7 @@ function navTo(id){
   else if(id==='ledger')   renderLedger();
   else if(id==='insIn')    renderInsInList();
   else if(id==='insOut')   renderInsOutList();
+  else if(id==='files')    renderFiles();
   else if(id==='trace')    renderTrace();
   else if(id==='audit')    renderAudit();
   else if(id==='settings') renderSettings();
@@ -1285,6 +1286,89 @@ function renderAudit(){
     $('auditTable').innerHTML=html;
   },(err)=>{ $('auditTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
+}
+
+/* ════════ 첨부파일관리 (Google Drive 업로드 via GAS) ════════ */
+function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('파일 읽기 실패')); r.readAsDataURL(file); }); }
+async function gasUpload(cfg, payload){
+  const res=await fetch(cfg.driveUploadUrl,{ method:'POST', body:JSON.stringify(Object.assign({token:cfg.uploadToken}, payload)) });
+  const txt=await res.text(); let j;
+  try{ j=JSON.parse(txt); }catch(e){ throw new Error('서버 응답 오류 (GAS 배포/접근권한 확인)'); }
+  if(!j.ok) throw new Error(j.error||'요청 실패');
+  return j;
+}
+async function renderFiles(){
+  $('page').innerHTML='<div class="card"><div class="empty">불러오는 중...</div></div>';
+  let cfg={}; try{ cfg=(await get(ref(db,'amt_config'))).val()||{}; }catch(_){ cfg={}; }
+  let lots=[];
+  try{ const lv=(await get(ref(db,'gmp_data/lots'))).val()||{}; lots=Object.keys(lv).map(k=>Object.assign({_id:k},lv[k])).sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))); }
+  catch(e){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(e.message)+'</div></div>'; return; }
+  let opts='<option value="">— LOT 선택 —</option>';
+  lots.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+'</option>'; });
+  const cfgOk=!!(cfg.driveUploadUrl && cfg.uploadToken);
+  const setupNote = (canWrite()&&!cfgOk) ? '<div class="banner warn">⚠️ 업로드 설정이 필요합니다. (Firebase <b>amt_config</b>에 driveUploadUrl·uploadToken 설정, GAS 스크립트 속성에 ROOT_FOLDER_ID·UPLOAD_TOKEN 설정) 보기·다운로드는 설정 없이도 됩니다.</div>' : '';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">첨부파일관리</div></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">표준통관예정보고서·수입신고필증 등 PDF를 LOT에 첨부합니다. 파일은 회사 Google Drive에 저장되고, 여기에는 보기 링크만 보관됩니다.</div>'+
+    setupNote+
+    '<div class="field" style="max-width:400px"><label>LOT 선택</label><select id="fl_lot">'+opts+'</select></div>'+
+    '<div id="flBox"></div></div>';
+  $('fl_lot').addEventListener('change',()=>filesForLot(cfg, lots.find(x=>x._id===$('fl_lot').value)));
+}
+function filesForLot(cfg, lot){
+  const box=$('flBox'); if(!box) return;
+  if(usersUnsub){ usersUnsub(); usersUnsub=null; }
+  if(!lot){ box.innerHTML=''; return; }
+  const cfgOk=!!(cfg.driveUploadUrl && cfg.uploadToken);
+  let upHtml='';
+  if(canWrite() && cfgOk){
+    upHtml='<div class="card" style="background:#f8fafc;margin-top:12px"><b style="font-size:13px">새 첨부 업로드</b>'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:8px">'+
+      '<div class="field" style="margin:0"><label>문서유형</label><select id="fl_type"><option>표준통관예정보고서</option><option>수입신고필증</option><option>시험성적서</option><option>기타</option></select></div>'+
+      '<div class="field" style="margin:0"><label>PDF 파일</label><input id="fl_file" type="file" accept="application/pdf,image/*"></div>'+
+      '<button class="btn" id="fl_up">업로드</button></div>'+
+      '<div id="fl_status" style="font-size:12px;color:var(--muted);margin-top:6px"></div></div>';
+  }
+  box.innerHTML='<div id="flList" style="margin-top:12px"><div class="empty">불러오는 중...</div></div>'+upHtml;
+  const r=ref(db,'gmp_data/attachments/'+lot._id);
+  const cb=onValue(r,(snap)=>{
+    const v=snap.val()||{};
+    const rows=Object.keys(v).map(k=>Object.assign({_id:k},v[k])).sort((a,b)=>Number(b.uploadedAt||0)-Number(a.uploadedAt||0));
+    if(!rows.length){ $('flList').innerHTML='<div class="empty">첨부된 파일이 없습니다.</div>'; return; }
+    let html='<table><thead><tr><th>문서유형</th><th>파일명</th><th>업로드</th><th></th></tr></thead><tbody>';
+    rows.forEach(x=>{ const dt=new Date(Number(x.uploadedAt||0)); const ds=isNaN(dt.getTime())?'':dt.toLocaleDateString('ko-KR');
+      html+='<tr><td>'+escHtml(x.docType||'')+'</td><td>'+escHtml(x.name||'')+'</td><td>'+escHtml(x.by||'')+' · '+escHtml(ds)+'</td><td><div class="actions-cell"><a class="btn btn-ghost btn-sm" href="'+escHtml(x.viewUrl||'#')+'" target="_blank" rel="noopener">보기</a>'+((canWrite()&&cfgOk)?'<button class="btn btn-ghost btn-sm" data-del="'+escHtml(x._id)+'">삭제</button>':'')+'</div></td></tr>'; });
+    html+='</tbody></table>';
+    const w=$('flList'); w.innerHTML=html;
+    w.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>delAttachment(cfg, lot, rows.find(z=>z._id===b.getAttribute('data-del')))));
+  },(err)=>{ $('flList').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  usersUnsub=()=>off(r,'value',cb);
+  if(canWrite() && cfgOk && $('fl_up')) $('fl_up').addEventListener('click',()=>doUpload(cfg, lot));
+}
+async function doUpload(cfg, lot){
+  const fileEl=$('fl_file'); const st=$('fl_status');
+  if(!fileEl||!fileEl.files||!fileEl.files[0]){ toast('파일을 선택하세요'); return; }
+  const file=fileEl.files[0];
+  if(file.size>40*1024*1024){ toast('40MB 이하만 업로드 가능합니다'); return; }
+  const docType=($('fl_type')&&$('fl_type').value)||'기타';
+  if(st) st.textContent='업로드 중...'; const btn=$('fl_up'); if(btn) btn.disabled=true;
+  try{
+    const base64Data=await fileToBase64(file);
+    const j=await gasUpload(cfg,{ action:'upload', base64Data, filename:file.name, mimeType:file.type||'application/pdf', product:lot.product, lot:lot.lotNo, docType });
+    await push(ref(db,'gmp_data/attachments/'+lot._id),{ fileId:j.fileId, name:j.name, viewUrl:j.viewUrl, downloadUrl:j.downloadUrl, docType, uploadedAt:Date.now(), by:currentUser.name });
+    logAudit('첨부','파일 업로드: '+lot.product+'/'+lot.lotNo+' · '+docType+' · '+j.name);
+    if(st) st.textContent='완료 ✅'; fileEl.value='';
+  }catch(e){ if(st) st.textContent='실패: '+e.message; toast('업로드 실패: '+e.message); }
+  finally{ if(btn) btn.disabled=false; }
+}
+async function delAttachment(cfg, lot, att){
+  if(!att) return;
+  if(!confirm('이 첨부를 삭제할까요? (Drive 휴지통으로 이동)\n'+att.name)) return;
+  try{
+    if(att.fileId){ try{ await gasUpload(cfg,{ action:'delete', fileId:att.fileId }); }catch(_){} }
+    await set(ref(db,'gmp_data/attachments/'+lot._id+'/'+att._id), null);
+    logAudit('첨부삭제','파일 삭제: '+lot.product+'/'+lot.lotNo+' · '+att.name);
+    toast('삭제되었습니다');
+  }catch(e){ toast('삭제 실패: '+e.message); }
 }
 
 /* ── 설정: 사용자관리 ── */
