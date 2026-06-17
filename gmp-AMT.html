@@ -661,7 +661,7 @@ function openLotModal(p){
 }
 
 /* ════════ 출고 (내부거래 AMT→KY 자동연동) — 2-D-1 ════════ */
-let ledgerLots=[], ledgerOut=[], ledgerNcr=[], ignoredTrades=new Set();
+let ledgerLots=[], ledgerOut=[], ledgerNcr=[], ledgerReturns=[], ignoredTrades=new Set();
 function snapArr(snap){ const v=snap.val()||{}; return Object.keys(v).map(k=>Object.assign({_id:k},v[k])); }
 function igKey(id, product){ return String(id+'_'+product).replace(/[^a-zA-Z0-9]/g,'_'); }
 async function ignoreTrade(r){
@@ -706,11 +706,12 @@ async function renderLedger(){
   ['lg_model','lg_lot','lg_from','lg_to'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input',drawLedgerTable); });
   if($('lg_print')) $('lg_print').addEventListener('click',printLedger);
 
-  const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound'); const rNcr=ref(db,'gmp_data/nonconformities');
+  const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound'); const rNcr=ref(db,'gmp_data/nonconformities'); const rRet=ref(db,'gmp_data/returns');
   const cbL=onValue(rLots,(s)=>{ ledgerLots=snapArr(s); redrawLedger(); });
   const cbO=onValue(rOut,(s)=>{ ledgerOut=snapArr(s); redrawLedger(); });
   const cbN=onValue(rNcr,(s)=>{ ledgerNcr=snapArr(s); redrawLedger(); });
-  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); off(rNcr,'value',cbN); };
+  const cbR=onValue(rRet,(s)=>{ ledgerReturns=snapArr(s); redrawLedger(); });
+  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); off(rNcr,'value',cbN); off(rRet,'value',cbR); };
 }
 function redrawLedger(){ drawOutPending(); drawOutboundList(); drawLedgerTable(); }
 
@@ -723,12 +724,14 @@ function ledgerRows(){
     let bal=Number(l.initialQty)||0;
     out.push({ kind:'in', model:l.model||l.product, lot:l.lotNo, date:l.inDate||l.prodDate||'', inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, bal });
     const evs=[];
-    ledgerOut.filter(o=> o.lotId===l._id && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
+    ledgerOut.filter(o=> o.lotId===l._id && !o.voided && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
       .forEach(o=>evs.push({ kind:'out', model:o.model||l.model||o.product, date:o.date||'', ord:Number(o.createdAt||0), qty:Number(o.qty)||0, dest:o.dest||'KY 메디칼' }));
+    ledgerReturns.filter(n=> n.lotId===l._id && Number(n.qty)>0)
+      .forEach(n=>evs.push({ kind:'return', model:n.model||l.model||n.product, date:n.returnDate||'', ord:Number(n.createdAt||0), qty:Number(n.qty)||0, reason:n.reason||'' }));
     ledgerNcr.filter(n=> n.lotId===l._id && Number(n.qtyDeducted)>0)
       .forEach(n=>evs.push({ kind:'ncr', model:n.model||l.model||n.product, date:n.reportDate||'', ord:Number(n.createdAt||0), qty:Number(n.qtyDeducted)||0, disposition:n.disposition||'폐기', desc:n.defectDesc||'' }));
     evs.sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || (a.ord-b.ord));
-    evs.forEach(e=>{ bal -= Number(e.qty)||0; e.lot=l.lotNo; e.bal=bal; out.push(e); });
+    evs.forEach(e=>{ if(e.kind==='return') bal += Number(e.qty)||0; else bal -= Number(e.qty)||0; e.lot=l.lotNo; e.bal=bal; out.push(e); });
   });
   return out;
 }
@@ -744,16 +747,17 @@ function ledgerFiltered(){
   return rows;
 }
 function ledgerCells(r){
-  const isIn=r.kind==='in', isOut=r.kind==='out', isNcr=r.kind==='ncr';
+  const isIn=r.kind==='in', isOut=r.kind==='out', isNcr=r.kind==='ncr', isRet=r.kind==='return';
   const scrap = (isNcr && r.disposition==='폐기') ? r.qty : null;
-  let qc, bigo='';
+  let qc, bigo='', inDateC=isIn?(r.inDate||''):'', inQtyC=isIn?r.inQty:null;
   if(isNcr){ const dp=r.disposition||'폐기'; qc='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(dp)+'</span>'; bigo=(dp==='폐기'?(r.date+(r.desc?(' · '+r.desc):'')):(dp+' '+r.qty+(r.desc?(' · '+r.desc):''))); }
+  else if(isRet){ qc='<span class="pill" style="background:#dbeafe;color:#1d4ed8">반품</span>'; inDateC=r.date||''; inQtyC=r.qty; bigo='반품 +'+fmt(r.qty)+(r.reason?(' · '+r.reason):''); }
   else qc='<span class="pill green">합격</span>';
   return {
-    inDate: isIn?(r.inDate||''):'', inQty: isIn?r.inQty:null,
+    inDate: inDateC, inQty: inQtyC,
     outDate: isOut?(r.date||''):'', outQty: isOut?r.qty:null,
     scrap, dest: isOut?(r.dest||''):'', qc, bigo,
-    bg: isIn?'#ffffff':(isOut?'#f3f8ff':'#fff5f5')
+    bg: isIn?'#ffffff':(isOut?'#f3f8ff':(isRet?'#eff6ff':'#fff5f5'))
   };
 }
 function drawLedgerTable(){
@@ -792,7 +796,7 @@ function printLedger(){
       '<td>'+escHtml(c.inDate)+'</td><td class="r">'+(c.inQty!=null?Number(c.inQty).toLocaleString():'')+'</td>'+
       '<td>'+escHtml(c.outDate)+'</td><td class="r">'+(c.outQty!=null?Number(c.outQty).toLocaleString():'')+'</td>'+
       '<td class="r">'+(c.scrap!=null?Number(c.scrap).toLocaleString():'')+'</td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
-      '<td>'+escHtml(c.dest)+'</td><td>'+(r.kind==='ncr'?escHtml(r.disposition||'폐기'):'합격')+'</td><td>'+escHtml(c.bigo)+'</td></tr>';
+      '<td>'+escHtml(c.dest)+'</td><td>'+(r.kind==='ncr'?escHtml(r.disposition||'폐기'):(r.kind==='return'?'반품':'합격'))+'</td><td>'+escHtml(c.bigo)+'</td></tr>';
   });
   const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
   w.document.open();
@@ -810,7 +814,7 @@ function printLedger(){
 function drawOutPending(){
   const el=$('outPending'); if(!el) return;
   if(amtKy.status!=='ok'){ el.innerHTML='<div class="empty">운영앱 연결 시 내부거래가 표시됩니다.</div>'; return; }
-  const done=new Set(ledgerOut.map(o=>String(o.srcTradeId)+'|'+o.product));
+  const done=new Set(ledgerOut.filter(o=>!o.voided).map(o=>String(o.srcTradeId)+'|'+o.product));
   const trades=amtKy.internalTrades.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
   const rows=[];
   trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(done.has(String(t.id)+'|'+gp)) return; if(ignoredTrades.has(igKey(t.id,gp))) return; rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
@@ -888,17 +892,73 @@ function drawOutboundList(){
   const el=$('outList'); if(!el) return;
   if(!ledgerOut.length){ el.innerHTML='<div class="empty">출고 기록이 없습니다.</div>'; return; }
   const rows=ledgerOut.slice().sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
-  let html='<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th></tr></thead><tbody>';
+  let html='<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
   rows.forEach(o=>{
-    let ins;
-    if(o.inspectOutStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-opdf="'+escHtml(o._id)+'">성적서</button></div>';
-    else ins = canWrite() ? '<button class="btn btn-sm" data-oins="'+escHtml(o._id)+'">출고검사 작성</button>' : '<span class="pill amber">대기</span>';
-    html+='<tr><td>'+escHtml(o.date)+'</td><td><b>'+escHtml(o.product)+'</b></td><td>'+escHtml(o.lotNo)+'</td><td>'+fmt(o.qty)+'</td><td>'+escHtml(o.dest)+'</td><td>'+ins+'</td></tr>';
+    let ins, manage='', rowStyle='';
+    if(o.voided){
+      rowStyle=' style="background:#f3f4f6;color:#9ca3af;text-decoration:line-through"';
+      ins='<span class="pill" style="background:#e5e7eb;color:#6b7280">취소됨</span>';
+      manage = canWrite()?'<td><span style="color:#9ca3af;font-size:12px">'+escHtml(o.voidReason||'취소')+'</span></td>':'';
+    }else{
+      if(o.inspectOutStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-opdf="'+escHtml(o._id)+'">성적서</button></div>';
+      else ins = canWrite() ? '<button class="btn btn-sm" data-oins="'+escHtml(o._id)+'">출고검사 작성</button>' : '<span class="pill amber">대기</span>';
+      manage = canWrite()?'<td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-oret="'+escHtml(o._id)+'">반품</button><button class="btn btn-danger btn-sm" data-ovoid="'+escHtml(o._id)+'">취소</button></div></td>':'';
+    }
+    html+='<tr'+rowStyle+'><td>'+escHtml(o.date)+'</td><td><b>'+escHtml(o.product)+'</b></td><td>'+escHtml(o.lotNo)+'</td><td>'+fmt(o.qty)+'</td><td>'+escHtml(o.dest)+'</td><td>'+ins+'</td>'+manage+'</tr>';
   });
   html+='</tbody></table>';
   el.innerHTML=html;
   el.querySelectorAll('[data-oins]').forEach(b=>b.addEventListener('click',()=>renderInspectOutForm(rows.find(x=>x._id===b.getAttribute('data-oins')))));
   el.querySelectorAll('[data-opdf]').forEach(b=>b.addEventListener('click',()=>openInspectOutPdf(rows.find(x=>x._id===b.getAttribute('data-opdf')))));
+  el.querySelectorAll('[data-oret]').forEach(b=>b.addEventListener('click',()=>returnOutbound(rows.find(x=>x._id===b.getAttribute('data-oret')))));
+  el.querySelectorAll('[data-ovoid]').forEach(b=>b.addEventListener('click',()=>voidOutbound(rows.find(x=>x._id===b.getAttribute('data-ovoid')))));
+}
+
+async function voidOutbound(o){
+  if(!o || o.voided) return;
+  if(!confirm('이 출고를 취소(무효)할까요?\n'+o.product+' / LOT '+o.lotNo+' / '+fmt(o.qty)+'개\n\n→ 재고가 원복되고, 출고/검사성적서는 "취소됨"으로 표시됩니다.')) return;
+  const reason=prompt('취소 사유를 입력하세요 (예: 입력 실수 / 출고 취소):','');
+  if(reason===null) return;
+  try{
+    const lotSnap=(await get(ref(db,'gmp_data/lots/'+o.lotId))).val();
+    if(lotSnap){ await update(ref(db,'gmp_data/lots/'+o.lotId), { currentQty:(Number(lotSnap.currentQty)||0)+(Number(o.qty)||0) }); }
+    await update(ref(db,'gmp_data/outbound/'+o._id), { voided:true, voidReason:(reason||'취소'), voidDate:new Date().toISOString().slice(0,10), voidBy:currentUser.name });
+    if(o.inspectOutId){ await update(ref(db,'gmp_data/inspectOut/'+o.inspectOutId), { voided:true }); }
+    logAudit('출고취소','출고 취소: '+o.product+'/'+o.lotNo+' '+fmt(o.qty)+'개 ('+(reason||'취소')+') · 재고 원복');
+    toast('출고를 취소했습니다 (재고 원복)');
+  }catch(e){ toast('취소 실패: '+e.message); }
+}
+
+function returnOutbound(o){
+  if(!o || o.voided) return;
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal"><div class="modal-h"><b>반품 처리 — '+escHtml(o.product)+' / LOT '+escHtml(o.lotNo)+'</b></div>'+
+    '<div class="modal-b">'+
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">출고는 그대로 두고, 돌아온 수량만큼 재고를 복원합니다. (원 출고 '+fmt(o.qty)+'개)</div>'+
+    '<div style="display:flex;gap:12px"><div class="field" style="flex:1"><label>반품 수량</label><input id="rt_qty" type="number" min="1" max="'+(Number(o.qty)||0)+'" value="'+(Number(o.qty)||0)+'"></div>'+
+    '<div class="field" style="flex:1"><label>반품일</label><input id="rt_date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div></div>'+
+    '<div class="field"><label>반품 사유</label><input id="rt_reason" placeholder="예: 고객 반품 / 오배송 등"></div>'+
+    '<div class="field"><label>품질책임자</label><input id="rt_qm" value="강승섭"></div>'+
+    '</div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="rt_cancel">취소</button><button class="btn" id="rt_save">반품 처리</button></div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#rt_cancel').addEventListener('click',()=>m.remove());
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#rt_save').addEventListener('click',async()=>{
+    const qty=parseInt(m.querySelector('#rt_qty').value,10)||0;
+    const date=m.querySelector('#rt_date').value||new Date().toISOString().slice(0,10);
+    const reason=(m.querySelector('#rt_reason').value||'').trim();
+    const qm=(m.querySelector('#rt_qm').value||'강승섭').trim();
+    if(qty<=0){ toast('반품 수량을 입력하세요'); return; }
+    if(qty>(Number(o.qty)||0)){ toast('원 출고 수량보다 많을 수 없습니다'); return; }
+    try{
+      const lotSnap=(await get(ref(db,'gmp_data/lots/'+o.lotId))).val();
+      if(lotSnap){ await update(ref(db,'gmp_data/lots/'+o.lotId), { currentQty:(Number(lotSnap.currentQty)||0)+qty }); }
+      await push(ref(db,'gmp_data/returns'), { outboundId:o._id, lotId:o.lotId, product:o.product, model:o.model||'', lotNo:o.lotNo, qty, returnDate:date, reason, inspector:qm, createdAt:Date.now(), by:currentUser.name });
+      logAudit('반품','반품 처리: '+o.product+'/'+o.lotNo+' '+fmt(qty)+'개 ('+(reason||'')+') · 재고 복원');
+      toast('반품 처리 완료 (재고 복원)'); m.remove();
+    }catch(e){ toast('반품 실패: '+e.message); }
+  });
 }
 
 /* ════════ 입고검사성적서 (2-C) ════════ */
@@ -1200,7 +1260,7 @@ function renderInsOutList(){
     if(!rows.length){ $('insOutTable').innerHTML='<div class="empty">아직 작성된 출고검사성적서가 없습니다. (입출고관리대장 → 출고 기록에서 “출고검사 작성”)</div>'; return; }
     rows.sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
     let html='<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
-    rows.forEach(x=>{ const ov=x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'; html+='<tr><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button></div></td></tr>'; });
+    rows.forEach(x=>{ const ov=x.voided?'<span class="pill" style="background:#e5e7eb;color:#6b7280">취소됨</span>':(x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'); const rs=x.voided?' style="color:#9ca3af;text-decoration:line-through"':''; html+='<tr'+rs+'><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell"><button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button></div></td></tr>'; });
     html+='</tbody></table>';
     const wrap=$('insOutTable'); wrap.innerHTML=html;
     wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectOut(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
@@ -1283,8 +1343,8 @@ async function traceShow(lot){
   if(!outs.length) html+='<div class="empty">출고 내역이 없습니다.</div>';
   else{
     html+='<table style="margin-top:8px"><thead><tr><th>출고일</th><th>수량</th><th>출고처</th><th>출고검사</th></tr></thead><tbody>';
-    outs.forEach(o=>{ const oi=o.inspectOutStatus==='done'?'<span class="pill green">'+(o.inspectOutOverall==='pass'?'합격':'불합격')+'</span>':'<span class="pill amber">미검사</span>'; html+='<tr><td>'+escHtml(o.date)+'</td><td style="text-align:right">'+fmt(o.qty)+'</td><td>'+escHtml(o.dest||'')+'</td><td>'+oi+'</td></tr>'; });
-    const totalOut=outs.reduce((s,o)=>s+(Number(o.qty)||0),0);
+    outs.forEach(o=>{ const oi=o.voided?'<span class="pill" style="background:#e5e7eb;color:#6b7280">취소됨</span>':(o.inspectOutStatus==='done'?'<span class="pill green">'+(o.inspectOutOverall==='pass'?'합격':'불합격')+'</span>':'<span class="pill amber">미검사</span>'); const rs=o.voided?' style="color:#9ca3af;text-decoration:line-through"':''; html+='<tr'+rs+'><td>'+escHtml(o.date)+'</td><td style="text-align:right">'+fmt(o.qty)+'</td><td>'+escHtml(o.dest||'')+'</td><td>'+oi+'</td></tr>'; });
+    const totalOut=outs.reduce((s,o)=>s+(o.voided?0:(Number(o.qty)||0)),0);
     html+='</tbody><tfoot><tr><td><b>합계</b></td><td style="text-align:right"><b>'+fmt(totalOut)+'</b></td><td colspan="2"></td></tr></tfoot></table>';
   }
   html+='</div>';
