@@ -379,14 +379,18 @@ const SEED_PRODUCTS=[
 ];
 async function seedProducts(){
   const exist = (await get(ref(db,'gmp_data/products'))).val()||{};
-  const names = Object.values(exist).map(p=>p.name);
-  const toAdd = SEED_PRODUCTS.filter(p=>!names.includes(p.name));
-  if(!toAdd.length){ toast('이미 4제품이 모두 등록되어 있습니다'); return; }
-  if(!confirm(toAdd.length+'개 제품을 등록할까요? ('+toAdd.map(p=>p.name).join(', ')+')')) return;
+  const byName={}; Object.keys(exist).forEach(k=>{ byName[exist[k].name]=Object.assign({_key:k},exist[k]); });
+  const toAdd = SEED_PRODUCTS.filter(p=>!byName[p.name]);
+  const toFill = SEED_PRODUCTS.filter(p=>byName[p.name] && !(byName[p.name].gtins&&byName[p.name].gtins.length) && p.gtins&&p.gtins.length);
+  if(!toAdd.length && !toFill.length){ toast('이미 4제품이 등록되어 있고 GTIN도 채워져 있습니다'); return; }
+  const msg=[]; if(toAdd.length) msg.push('신규 등록: '+toAdd.map(p=>p.name).join(', ')); if(toFill.length) msg.push('GTIN 보충: '+toFill.map(p=>p.name).join(', '));
+  if(!confirm(msg.join('\n')+'\n\n진행할까요?')) return;
   try{
     for(const p of toAdd){ await push(ref(db,'gmp_data/products'), Object.assign({createdAt:Date.now(),updatedAt:Date.now()}, p)); }
-    logAudit('등록','기본 제품 '+toAdd.length+'개 일괄 등록'); toast(toAdd.length+'개 등록 완료');
-  }catch(e){ toast('등록 실패: '+e.message); }
+    for(const p of toFill){ await update(ref(db,'gmp_data/products/'+byName[p.name]._key), { gtins:p.gtins, updatedAt:Date.now() }); }
+    logAudit('등록','기본 제품 등록/보충 (신규 '+toAdd.length+'개, GTIN보충 '+toFill.length+'개)');
+    toast('완료 — '+msg.join(' · '));
+  }catch(e){ toast('실패: '+e.message); }
 }
 
 /* ════════ LOT 관리 · 입고 (2-B) ════════ */
