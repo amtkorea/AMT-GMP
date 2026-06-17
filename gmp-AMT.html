@@ -304,7 +304,7 @@ function renderPlaceholder(label){ $('page').innerHTML='<div class="card"><div c
 
 /* ── 제품관리 ── */
 const canWrite = ()=> currentUser && (currentUser.role==='super'||currentUser.role==='admin'||currentUser.role==='quality');
-const canSign  = ()=> currentUser && currentUser.role==='quality';
+const canSign  = ()=> currentUser && (currentUser.role==='quality' || currentUser.role==='super');
 let QM_NAME='강승섭';
 async function loadQmName(){ try{ const a=(await get(ref(db,'gmp_admins'))).val()||{}; const q=Object.values(a).find(u=>u && u.role==='quality'); QM_NAME=(q&&q.name)?q.name:'강승섭'; }catch(_){ QM_NAME='강승섭'; } }
 function renderProducts(){
@@ -1383,13 +1383,14 @@ function renderInsOutList(){
 /* ════════ 대시보드 ════════ */
 async function renderDash(){
   $('page').innerHTML='<div class="card"><div class="empty">불러오는 중...</div></div>';
-  let products=[],lots=[],outsAll=[],returns=[];
+  let products=[],lots=[],outsAll=[],returns=[],ncrs=[];
   try{
-    const [pv,lv,ov,rv]=await Promise.all([ get(ref(db,'gmp_data/products')), get(ref(db,'gmp_data/lots')), get(ref(db,'gmp_data/outbound')), get(ref(db,'gmp_data/returns')) ]);
+    const [pv,lv,ov,rv,nv]=await Promise.all([ get(ref(db,'gmp_data/products')), get(ref(db,'gmp_data/lots')), get(ref(db,'gmp_data/outbound')), get(ref(db,'gmp_data/returns')), get(ref(db,'gmp_data/nonconformities')) ]);
     products=Object.values(pv.val()||{});
     lots=Object.keys(lv.val()||{}).map(k=>Object.assign({_id:k},lv.val()[k]));
     outsAll=Object.values(ov.val()||{});
     returns=Object.values(rv.val()||{});
+    ncrs=Object.values(nv.val()||{});
   }catch(e){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(e.message)+'</div></div>'; return; }
   const outs=outsAll.filter(o=>!o.voided);   // 실제 발생한 출고 (취소 제외)
   const voidedCnt=outsAll.length-outs.length; // 취소 건수
@@ -1397,6 +1398,10 @@ async function renderDash(){
   const totalStock=lots.reduce((s,l)=>s+(Number(l.currentQty)||0),0);
   const inDone=lots.filter(l=>l.inspectInStatus==='done').length;
   const inPend=lots.length-inDone;
+  const inAwait=lots.filter(l=>l.inspectInStatus==='await').length;
+  const outAwait=outsAll.filter(o=>!o.voided && o.inspectOutStatus==='await').length;
+  const ncrAwait=ncrs.filter(n=>n.signStatus!=='signed' && !n.signature).length;
+  const signAwait=inAwait+outAwait+ncrAwait;
   const soon=new Date(); soon.setMonth(soon.getMonth()+6); const soonISO=soon.toISOString().slice(0,10);
   const expSoon=lots.filter(l=>l.expiry && l.expiry<=soonISO && (Number(l.currentQty)||0)>0).sort((a,b)=>String(a.expiry).localeCompare(String(b.expiry)));
   function card(label,val,sub){ return '<div class="card" style="flex:1;min-width:148px;margin:0"><div style="color:var(--muted);font-size:12px">'+label+'</div><div style="font-size:24px;font-weight:800;margin-top:4px">'+val+'</div>'+(sub?'<div style="color:var(--muted);font-size:11px;margin-top:2px">'+sub+'</div>':'')+'</div>'; }
@@ -1405,6 +1410,11 @@ async function renderDash(){
     card('등록 제품',products.length+'종')+card('등록 LOT',lots.length+'건')+
     card('총 현재고',fmt(totalStock)+' EA')+card('출고 건수',outs.length+'건', outSub||'취소·반품 없음')+
     card('입고검사',inDone+' 완료',inPend+' 대기')+'</div>';
+  if(signAwait>0){
+    const parts=[(inAwait?'입고검사 '+inAwait:''),(outAwait?'출고검사 '+outAwait:''),(ncrAwait?'부적합 '+ncrAwait:'')].filter(Boolean).join(' · ');
+    const cta = canSign() ? '<span style="font-size:12px;color:var(--muted)">→ 각 목록에서 "서명하기"로 확정하세요</span>' : '<span style="font-size:12px;color:var(--muted)">→ 품질책임자 서명이 필요합니다</span>';
+    html+='<div class="card" style="border-left:4px solid #f59e0b;background:#fffbeb;margin-bottom:14px"><b style="font-size:13px">✍️ 서명 대기 '+signAwait+'건</b> &nbsp;<span style="font-size:12px;color:#b45309">'+escHtml(parts)+'</span><div style="margin-top:4px">'+cta+'</div></div>';
+  }
   if(expSoon.length){
     html+='<div class="card" style="border-left:4px solid #f59e0b"><b style="font-size:13px">⚠️ 유통기한 6개월 이내 LOT ('+expSoon.length+')</b>'+
       '<table style="margin-top:8px"><thead><tr><th>제품</th><th>LOT</th><th>유통기한</th><th>현재재고</th></tr></thead><tbody>';
