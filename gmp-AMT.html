@@ -551,29 +551,51 @@ function parseGs1(raw){
   };
 }
 
-/* ── 카메라 스캔 (BarcodeDetector, Pixel9 Chrome 지원) ── */
+/* ── 카메라 스캔 (BarcodeDetector + 줌·조명·고해상도) ── */
 async function openScanner(onResult){
   let detector;
   try{
-    if(!('BarcodeDetector' in window)) throw new Error('이 브라우저는 자동 스캔 미지원');
+    if(!('BarcodeDetector' in window)) throw new Error('이 브라우저는 자동 스캔 미지원 (아이폰 사파리 등)');
     const fmts = await window.BarcodeDetector.getSupportedFormats();
     if(!fmts.includes('data_matrix')) throw new Error('이 기기는 DataMatrix 스캔 미지원');
     detector = new window.BarcodeDetector({formats:['data_matrix']});
   }catch(e){ toast('자동 스캔 불가 — 수동 입력하세요 ('+e.message+')'); return; }
 
   const m=document.createElement('div'); m.className='modal-bg';
-  m.innerHTML='<div class="modal" style="max-width:420px"><h3>GS1 매트릭스 스캔</h3>'+
-    '<video id="scanVid" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover"></video>'+
-    '<div style="color:var(--muted);font-size:12px;margin-top:8px">박스의 GS1 DataMatrix를 화면에 비추세요. 자동으로 인식됩니다.</div>'+
+  m.innerHTML='<div class="modal" style="max-width:440px"><h3>GS1 매트릭스 스캔</h3>'+
+    '<div style="position:relative">'+
+    '<video id="scanVid" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000;aspect-ratio:3/4;object-fit:cover"></video>'+
+    '<div style="position:absolute;inset:20% 26%;border:2px solid #38e07b;border-radius:8px;pointer-events:none"></div>'+
+    '</div>'+
+    '<div id="scanCtl" style="margin-top:10px;display:flex;flex-direction:column;gap:8px"></div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-top:8px">작은 코드는 <b>🔍 줌</b>으로 확대, 어두우면 <b>💡 조명</b>을 켜세요. 박스를 초록 테두리 안에 가까이 비추면 자동 인식됩니다.</div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="scanCancel">취소</button></div></div>';
   document.body.appendChild(m);
-  const vid=m.querySelector('#scanVid');
-  let stream=null, raf=0, stopped=false;
+  const vid=m.querySelector('#scanVid'), ctl=m.querySelector('#scanCtl');
+  let stream=null, raf=0, stopped=false, track=null, torchOn=false;
   function stop(){ stopped=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); m.remove(); }
   m.querySelector('#scanCancel').addEventListener('click', stop);
   try{
-    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} } });
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} } });
     vid.srcObject=stream; await vid.play();
+    track=stream.getVideoTracks()[0];
+    try{
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if(caps.focusMode && caps.focusMode.includes('continuous')){ try{ await track.applyConstraints({advanced:[{focusMode:'continuous'}]}); }catch(_){} }
+      if(caps.zoom && (caps.zoom.max||1) > (caps.zoom.min||1)){
+        const mn=caps.zoom.min||1, mx=caps.zoom.max||1, st=caps.zoom.step||0.1;
+        const z=document.createElement('div'); z.style.cssText='display:flex;align-items:center;gap:8px';
+        z.innerHTML='<span style="font-size:13px;white-space:nowrap">🔍 줌</span><input id="scanZoom" type="range" min="'+mn+'" max="'+mx+'" step="'+st+'" value="'+mn+'" style="flex:1"><span id="scanZoomV" style="font-size:12px;color:var(--muted);min-width:36px;text-align:right">'+Number(mn).toFixed(1)+'x</span>';
+        ctl.appendChild(z);
+        const zi=z.querySelector('#scanZoom'), zv=z.querySelector('#scanZoomV');
+        zi.addEventListener('input', async()=>{ try{ await track.applyConstraints({advanced:[{zoom:Number(zi.value)}]}); zv.textContent=Number(zi.value).toFixed(1)+'x'; }catch(_){} });
+      }
+      if(caps.torch){
+        const tb=document.createElement('button'); tb.className='btn btn-ghost btn-sm'; tb.type='button'; tb.textContent='💡 조명 켜기';
+        tb.addEventListener('click', async()=>{ torchOn=!torchOn; try{ await track.applyConstraints({advanced:[{torch:torchOn}]}); tb.textContent=torchOn?'💡 조명 끄기':'💡 조명 켜기'; }catch(_){} });
+        ctl.appendChild(tb);
+      }
+    }catch(_){}
   }catch(e){ toast('카메라 접근 실패: '+(e.message||e)); stop(); return; }
   async function tick(){
     if(stopped) return;
@@ -694,7 +716,7 @@ async function renderLedger(){
     '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 “AMT→KY 물품공급” 건입니다. 출고처는 KY 메디칼 고정, MEDIAS는 T·WTP로 나뉩니다. “출고 처리”에서 LOT는 유통기한 임박순(선입선출)으로 자동 배정됩니다.</div>'+
     '<div id="outPending"></div></div>'+
     '<div class="card"><div class="card-h"><div class="t">출고 기록</div></div><div id="outList"></div></div>'+
-    '<div class="card"><div class="card-h"><div class="t">입출고관리대장 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-OP-601</span></div><button class="btn btn-ghost btn-sm" id="lg_print">🖨 인쇄</button></div>'+
+    '<div class="card"><div class="card-h"><div class="t">입출고관리대장 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-DMF601-01</span></div><button class="btn btn-ghost btn-sm" id="lg_print">🖨 인쇄</button></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:end">'+
       '<div class="field" style="margin:0"><label>Model명</label><select id="lg_model"><option value="">전체</option>'+modelOpts+'</select></div>'+
       '<div class="field" style="margin:0"><label>LOT</label><input id="lg_lot" placeholder="LOT 검색"></div>'+
@@ -715,7 +737,7 @@ async function renderLedger(){
 }
 function redrawLedger(){ drawOutPending(); drawOutboundList(); drawLedgerTable(); }
 
-/* ════════ 입출고관리대장 (AMT-OP-601) — 합격 건 running 재고 ════════ */
+/* ════════ 입출고관리대장 (AMT-DMF601-01) — 합격 건 running 재고 ════════ */
 function ledgerRows(){
   const out=[];
   const lots = ledgerLots.slice().sort((a,b)=> String(a.inDate||a.prodDate||'').localeCompare(String(b.inDate||b.prodDate||'')) || Number(a.createdAt||0)-Number(b.createdAt||0));
@@ -749,10 +771,9 @@ function ledgerFiltered(){
 function ledgerCells(r){
   const isIn=r.kind==='in', isOut=r.kind==='out', isNcr=r.kind==='ncr', isRet=r.kind==='return';
   const scrap = (isNcr && r.disposition==='폐기') ? r.qty : null;
-  let qc, bigo='', inDateC=isIn?(r.inDate||''):'', inQtyC=isIn?r.inQty:null;
-  if(isNcr){ const dp=r.disposition||'폐기'; qc='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(dp)+'</span>'; bigo=(dp==='폐기'?(r.date+(r.desc?(' · '+r.desc):'')):(dp+' '+r.qty+(r.desc?(' · '+r.desc):''))); }
-  else if(isRet){ qc='<span class="pill" style="background:#dbeafe;color:#1d4ed8">반품</span>'; inDateC=r.date||''; inQtyC=r.qty; bigo='반품 +'+fmt(r.qty)+(r.reason?(' · '+r.reason):''); }
-  else qc='<span class="pill green">합격</span>';
+  let qc='강승섭', bigo='', inDateC=isIn?(r.inDate||''):'', inQtyC=isIn?r.inQty:null;
+  if(isNcr){ const dp=r.disposition||'폐기'; bigo=(dp==='폐기'?('폐기 · '+r.date+(r.desc?(' · '+r.desc):'')):(dp+' '+r.qty+(r.desc?(' · '+r.desc):''))); }
+  else if(isRet){ inDateC=r.date||''; inQtyC=r.qty; bigo='반품 +'+fmt(r.qty)+(r.reason?(' · '+r.reason):''); }
   return {
     inDate: inDateC, inQty: inQtyC,
     outDate: isOut?(r.date||''):'', outQty: isOut?r.qty:null,
@@ -764,7 +785,7 @@ function drawLedgerTable(){
   const el=$('ledgerTable'); if(!el) return;
   const rows=ledgerFiltered();
   if(!rows.length){ el.innerHTML='<div class="empty">검사 합격된 입출고 건이 없습니다. (입고검사·출고검사 합격 시 표시)</div>'; return; }
-  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-OP-601 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-DMF601-01 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
   html+='<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
   rows.forEach((r,i)=>{
     const c=ledgerCells(r);
@@ -796,15 +817,15 @@ function printLedger(){
       '<td>'+escHtml(c.inDate)+'</td><td class="r">'+(c.inQty!=null?Number(c.inQty).toLocaleString():'')+'</td>'+
       '<td>'+escHtml(c.outDate)+'</td><td class="r">'+(c.outQty!=null?Number(c.outQty).toLocaleString():'')+'</td>'+
       '<td class="r">'+(c.scrap!=null?Number(c.scrap).toLocaleString():'')+'</td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
-      '<td>'+escHtml(c.dest)+'</td><td>'+(r.kind==='ncr'?escHtml(r.disposition||'폐기'):(r.kind==='return'?'반품':'합격'))+'</td><td>'+escHtml(c.bigo)+'</td></tr>';
+      '<td>'+escHtml(c.dest)+'</td><td>강승섭</td><td>'+escHtml(c.bigo)+'</td></tr>';
   });
   const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
   w.document.open();
-  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>입출고관리대장 AMT-OP-601</title><style>'+
+  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>입출고관리대장 AMT-DMF601-01</title><style>'+
     '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
     'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right}'+
     '.foot{margin-top:14px;text-align:right;font-size:11px}'+
-    '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-OP-601 · (주)에이엠티코리아 · 검사 합격·부적합 처리 건 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
+    '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-DMF601-01 · (주)에이엠티코리아 · 검사 합격·부적합 처리 건 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
     '<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
     '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
@@ -820,12 +841,11 @@ function drawOutPending(){
   trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(done.has(String(t.id)+'|'+gp)) return; if(ignoredTrades.has(igKey(t.id,gp))) return; rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
   if(!rows.length){ el.innerHTML='<div class="empty">대기 중인 출고 건이 없습니다. (모두 처리됨)</div>'; return; }
   let html='<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
-  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button><button class="btn btn-ghost btn-sm" data-ig="'+idx+'">무시</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
+  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
   html+='</tbody></table>';
   el.innerHTML=html;
   if(canWrite()){
     el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(rows[parseInt(b.getAttribute('data-out'),10)])));
-    el.querySelectorAll('[data-ig]').forEach(b=>b.addEventListener('click',()=>ignoreTrade(rows[parseInt(b.getAttribute('data-ig'),10)])));
   }
 }
 
@@ -1080,7 +1100,7 @@ async function saveInspectIn(lot, prod, plan, sig){
   const remark = ($('ii_remark').value||'').trim();
   const sbatch = lot.sterile ? (($('ii_sbatch')||{value:''}).value||'').trim() : '';
   let docNo;
-  try{ docNo = await nextInsDocNo('AMT-OP-301', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
+  try{ docNo = await nextInsDocNo('AMT-DMF301-00', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
   const rec = {
     docNo, lotId:lot._id, product:lot.product, model:lot.model||prod.model||'', maker:prod.maker||'',
     customsNo:lot.customsNo||'', importDeclNo:lot.importDeclNo||'', lotNo:lot.lotNo, sterilBatchNo:sbatch,
@@ -1152,7 +1172,7 @@ async function openInspectPdfByLot(lot){
 }
 
 function renderInsInList(){
-  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">입고검사성적서 (AMT-OP-301)</div></div><div id="insInTable"><div class="empty">불러오는 중...</div></div></div>';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">입고검사성적서 (AMT-DMF301-00)</div></div><div id="insInTable"><div class="empty">불러오는 중...</div></div></div>';
   const r=ref(db,'gmp_data/inspectIn');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
@@ -1239,7 +1259,7 @@ async function saveInspectOut(ob, prod, plan, sig, customsNo, importDeclNo){
   const inspector=($('oo_inspector').value||'강승섭').trim();
   const remark=($('oo_remark').value||'').trim();
   const sbatch=ob.sterile?(($('oo_sbatch')||{value:''}).value||'').trim():'';
-  let docNo; try{ docNo=await nextInsDocNo('AMT-OP-301', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
+  let docNo; try{ docNo=await nextInsDocNo('AMT-DMF301-01', inspectDate); }catch(e){ toast('문서번호 생성 실패: '+e.message); return; }
   const rec={ docNo, outboundId:ob._id, product:ob.product, model:ob.model||prod.model||'', maker:prod.maker||ob.maker||'',
     customsNo:customsNo||ob.customsNo||'', importDeclNo:importDeclNo||ob.importDeclNo||'',
     lotNo:ob.lotNo, sterilBatchNo:sbatch, dest:ob.dest||'KY 메디칼', outDate:ob.date,
@@ -1268,7 +1288,7 @@ async function openInspectOutPdf(ob){
   printInspectOut(Object.assign({_id:ob.inspectOutId}, rec));
 }
 function renderInsOutList(){
-  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">출고검사성적서 (AMT-OP-301)</div></div><div id="insOutTable"><div class="empty">불러오는 중...</div></div></div>';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">출고검사성적서 (AMT-DMF301-01)</div></div><div id="insOutTable"><div class="empty">불러오는 중...</div></div></div>';
   const r=ref(db,'gmp_data/inspectOut');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
