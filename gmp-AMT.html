@@ -1135,7 +1135,7 @@ function renderInspectInForm(lot){
       '<span style="color:var(--muted);font-size:12px">특별검사수준 S-2 · AQL 1.0 · 시료문자 <b>'+plan.code+'</b> · 샘플크기 <b>'+plan.size+'</b> · Ac '+plan.ac+' · Re '+plan.re+'</span></div></div>'+
     '<b style="font-size:13px">검사 항목 <span style="color:var(--muted);font-weight:400">(시험방법: 육안검사)</span></b><div style="margin:8px 0 14px">'+itemsHtml+'</div>'+
     '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
-      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="ii_date" type="date" value="'+today+'"></div>'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="ii_date" type="date" value="'+(lot.inDate||lot.prodDate||today)+'"></div>'+
       '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="ii_inspector" value="강승섭"></div></div>'+
     '<div class="field"><label>비고</label><input id="ii_remark" placeholder="(선택)"></div>'+
     '<div class="field"><label>종합판정</label><div style="display:flex;gap:16px"><label class="chk"><input type="radio" name="overall" value="pass" checked> 합격</label><label class="chk"><input type="radio" name="overall" value="fail"> 불합격</label></div></div>'+
@@ -1303,7 +1303,7 @@ async function renderInspectOutForm(ob){
       '<span style="color:var(--muted);font-size:12px">특별검사수준 S-2 · AQL 1.0 · 시료문자 <b>'+plan.code+'</b> · 샘플크기 <b>'+plan.size+'</b> · Ac '+plan.ac+' · Re '+plan.re+'</span></div></div>'+
     '<b style="font-size:13px">검사 항목 <span style="color:var(--muted);font-weight:400">(시험방법: 육안검사)</span></b><div style="margin:8px 0 14px">'+itemsHtml+'</div>'+
     '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
-      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="oo_date" type="date" value="'+today+'"></div>'+
+      '<div class="field" style="flex:1;min-width:180px"><label>검사일</label><input id="oo_date" type="date" value="'+(ob.date||today)+'"></div>'+
       '<div class="field" style="flex:1;min-width:180px"><label>검사자(품질책임자)</label><input id="oo_inspector" value="강승섭"></div></div>'+
     '<div class="field"><label>비고</label><input id="oo_remark" placeholder="(선택)"></div>'+
     '<div class="field"><label>종합판정</label><div style="display:flex;gap:16px"><label class="chk"><input type="radio" name="ooverall" value="pass" checked> 합격</label><label class="chk"><input type="radio" name="ooverall" value="fail"> 불합격</label></div></div>'+
