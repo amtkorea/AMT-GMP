@@ -769,7 +769,7 @@ async function openManualLotModal(){
 }
 
 /* ════════ 출고 (내부거래 AMT→KY 자동연동) — 2-D-1 ════════ */
-let ledgerLots=[], ledgerOut=[], ledgerNcr=[], ledgerReturns=[], ignoredTrades=new Set();
+let ledgerLots=[], ledgerOut=[], ledgerNcr=[], ledgerReturns=[], ledgerSign=null, ignoredTrades=new Set();
 function snapArr(snap){ const v=snap.val()||{}; return Object.keys(v).map(k=>Object.assign({_id:k},v[k])); }
 function igKey(id, product){ return String(id+'_'+product).replace(/[^a-zA-Z0-9]/g,'_'); }
 async function ignoreTrade(r){
@@ -802,7 +802,8 @@ async function renderLedger(){
     '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">운영앱 “AMT→KY 물품공급” 건입니다. 출고처는 KY 메디칼 고정, MEDIAS는 T·WTP로 나뉩니다. “출고 처리”에서 LOT는 유통기한 임박순(선입선출)으로 자동 배정됩니다.</div>'+
     '<div id="outPending"></div></div>'+
     '<div class="card"><div class="card-h"><div class="t">출고 기록</div></div><div id="outList"></div></div>'+
-    '<div class="card"><div class="card-h"><div class="t">입출고관리대장 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-DMF601-01</span></div><button class="btn btn-ghost btn-sm" id="lg_print">🖨 인쇄</button></div>'+
+    '<div class="card"><div class="card-h"><div class="t">입출고관리대장 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-DMF601-01</span></div><div class="actions-cell">'+(canSign()?'<button class="btn btn-sm" id="lg_sign">✍️ 대장 서명</button>':'')+'<button class="btn btn-ghost btn-sm" id="lg_print">🖨 인쇄</button></div></div>'+
+    '<div id="lg_signStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:end">'+
       '<div class="field" style="margin:0"><label>Model명</label><select id="lg_model"><option value="">전체</option>'+modelOpts+'</select></div>'+
       '<div class="field" style="margin:0"><label>LOT</label><input id="lg_lot" placeholder="LOT 검색"></div>'+
@@ -813,13 +814,44 @@ async function renderLedger(){
 
   ['lg_model','lg_lot','lg_from','lg_to'].forEach(id=>{ const e=$(id); if(e) e.addEventListener('input',drawLedgerTable); });
   if($('lg_print')) $('lg_print').addEventListener('click',printLedger);
+  if($('lg_sign')) $('lg_sign').addEventListener('click',openLedgerSignModal);
 
+  const rSign=ref(db,'gmp_data/ledgerSign');
+  const cbS=onValue(rSign,(s)=>{ ledgerSign=s.val()||null; drawLedgerSignStatus(); });
   const rLots=ref(db,'gmp_data/lots'); const rOut=ref(db,'gmp_data/outbound'); const rNcr=ref(db,'gmp_data/nonconformities'); const rRet=ref(db,'gmp_data/returns');
   const cbL=onValue(rLots,(s)=>{ ledgerLots=snapArr(s); redrawLedger(); });
   const cbO=onValue(rOut,(s)=>{ ledgerOut=snapArr(s); redrawLedger(); });
   const cbN=onValue(rNcr,(s)=>{ ledgerNcr=snapArr(s); redrawLedger(); });
   const cbR=onValue(rRet,(s)=>{ ledgerReturns=snapArr(s); redrawLedger(); });
-  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); off(rNcr,'value',cbN); off(rRet,'value',cbR); };
+  productsUnsub=()=>{ off(rLots,'value',cbL); off(rOut,'value',cbO); off(rNcr,'value',cbN); off(rRet,'value',cbR); off(rSign,'value',cbS); };
+}
+function drawLedgerSignStatus(){
+  const el=$('lg_signStatus'); if(!el) return;
+  if(ledgerSign && ledgerSign.signature){ el.innerHTML='✍️ 품질책임자 서명 완료 — <b>'+escHtml(ledgerSign.by||'')+'</b> · 확인일 '+escHtml(ledgerSign.date||'')+' <span style="color:var(--muted)">(인쇄 시 하단에 서명이 들어갑니다)</span>'; }
+  else el.innerHTML='<span style="color:#b45309">아직 대장 서명이 없습니다. 품질책임자/총괄이 “대장 서명”을 눌러 서명하세요.</span>';
+}
+function openLedgerSignModal(){
+  if(!canSign()){ toast('서명은 품질책임자/총괄만 가능합니다'); return; }
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal"><div class="modal-h"><b>입출고관리대장 서명</b></div><div class="modal-b">'+
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">현재 시점까지의 입출고관리대장 기록을 품질책임자로서 확인·서명합니다. (확인일: '+new Date().toISOString().slice(0,10)+')</div>'+
+    '<canvas id="lg_sigc" width="600" height="160" style="width:100%;max-width:600px;height:160px;border:1px dashed var(--line);border-radius:8px;background:#fff;touch-action:none"></canvas>'+
+    '<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" id="lg_sigclr" type="button">서명 지우기</button></div>'+
+    '</div><div class="modal-foot"><button class="btn btn-ghost" id="lg_sigcancel">취소</button><button class="btn" id="lg_sigsave">서명 완료</button></div></div>';
+  document.body.appendChild(m);
+  const sig=setupSignature(m.querySelector('#lg_sigc'));
+  m.querySelector('#lg_sigclr').addEventListener('click',()=>sig.clear());
+  m.querySelector('#lg_sigcancel').addEventListener('click',()=>m.remove());
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#lg_sigsave').addEventListener('click',async()=>{
+    if(sig.isEmpty()){ toast('서명을 해주세요'); return; }
+    const btn=m.querySelector('#lg_sigsave'); btn.disabled=true;
+    try{
+      await set(ref(db,'gmp_data/ledgerSign'), { signature:sig.dataUrl(), by:currentUser.name, date:new Date().toISOString().slice(0,10), ts:Date.now() });
+      logAudit('서명','입출고관리대장 서명 ('+currentUser.name+')');
+      toast('대장 서명 완료'); m.remove();
+    }catch(e){ btn.disabled=false; toast('서명 실패: '+e.message); }
+  });
 }
 function redrawLedger(){ drawOutPending(); drawOutboundList(); drawLedgerTable(); }
 
@@ -910,10 +942,12 @@ function printLedger(){
   w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>입출고관리대장 AMT-DMF601-01</title><style>'+
     '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
     'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right}'+
-    '.foot{margin-top:14px;text-align:right;font-size:11px}'+
+    '.foot{margin-top:18px;text-align:right;font-size:12px} .foot img{height:48px;vertical-align:middle;margin-left:8px}'+
     '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-DMF601-01 · (주)에이엠티코리아 · 검사 합격·부적합 처리 건 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
     '<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
-    '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
+    '<div class="foot">'+(ledgerSign&&ledgerSign.signature
+      ? '품질책임자 : '+escHtml(ledgerSign.by||'')+' <img src="'+ledgerSign.signature+'"> &nbsp; 확인일 '+escHtml(ledgerSign.date||'')
+      : '품질책임자 : 강승섭 (인) &nbsp;<span style="color:#999">※ 미서명 — “대장 서명”으로 전자서명 가능</span>')+'</div></body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
   logAudit('PDF출력','입출고관리대장 인쇄 ('+rows.length+'행)');
 }
@@ -1183,9 +1217,9 @@ async function nextInsDocNo(prefix, dateStr){
   const ym=(dateStr||new Date().toISOString().slice(0,10)).slice(0,7).replace('-','');
   const a=(await get(ref(db,'gmp_data/inspectIn'))).val()||{};
   const b=(await get(ref(db,'gmp_data/inspectOut'))).val()||{};
-  let max=0; const re=new RegExp('^'+prefix+'-'+ym+'-(\\d+)$');
+  let max=0; const esc=prefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); const re=new RegExp('^'+esc+'-(\\d+)-\\d{6}$');
   [a,b].forEach(obj=>Object.values(obj).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } }));
-  return prefix+'-'+ym+'-'+String(max+1).padStart(3,'0');
+  return prefix+'-'+String(max+1).padStart(3,'0')+'-'+ym;
 }
 
 function renderInspectInForm(lot){
@@ -1663,13 +1697,13 @@ async function delAttachment(cfg, lot, att){
 async function nextNcrDocNo(dateStr){
   const ym=(dateStr||new Date().toISOString().slice(0,10)).slice(0,7).replace('-','');
   const all=(await get(ref(db,'gmp_data/nonconformities'))).val()||{};
-  let max=0; const re=new RegExp('^DMF501-00-'+ym+'-(\\d+)$');
+  let max=0; const re=/^AMT-DMF501-00-(\d+)-\d{6}$/;
   Object.values(all).forEach(v=>{ const mm=String(v.docNo||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } });
-  return 'DMF501-00-'+ym+'-'+String(max+1).padStart(3,'0');
+  return 'AMT-DMF501-00-'+String(max+1).padStart(3,'0')+'-'+ym;
 }
 function renderNcr(){
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">부적합품 관리 <span style="color:var(--muted);font-weight:400;font-size:12px">AMT-OP-501</span></div><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" id="nc_new">부적합품 등록</button>':'')+'<button class="btn btn-ghost btn-sm" id="nc_print">🖨 대장 인쇄</button></div></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">부적합품관리대장 (DMF501-01). 처리구분: 반품·특채·선별·폐기. 폐기·반품·선별은 재고 차감, 특채(사용)는 유지됩니다.</div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">부적합품관리대장 (AMT-DMF501-01). 처리구분: 반품·특채·선별·폐기. 폐기·반품·선별은 재고 차감, 특채(사용)는 유지됩니다.</div>'+
     '<div id="ncTable"><div class="empty">불러오는 중...</div></div></div>';
   if($('nc_new')) $('nc_new').addEventListener('click',()=>renderNcrForm());
   if($('nc_print')) $('nc_print').addEventListener('click',printNcrLedger);
@@ -1699,7 +1733,7 @@ async function renderNcrForm(){
   let opts='<option value="">— LOT 선택 —</option>';
   lots.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+' (현재고 '+fmt(l.currentQty)+')</option>'; });
   const today=new Date().toISOString().slice(0,10);
-  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">부적합품 등록 (DMF501-00)</div><button class="btn btn-ghost btn-sm" id="nc_back">← 목록으로</button></div>'+
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">부적합품 등록 (AMT-DMF501-00)</div><button class="btn btn-ghost btn-sm" id="nc_back">← 목록으로</button></div>'+
     '<div class="field" style="max-width:480px"><label>LOT</label><select id="nc_lot">'+opts+'</select></div>'+
     '<div style="display:flex;gap:14px;flex-wrap:wrap"><div class="field" style="flex:1;min-width:140px"><label>부적합 수량</label><input id="nc_qty" type="number" min="1" placeholder="개수"></div>'+
     '<div class="field" style="flex:1;min-width:180px"><label>결함등급</label><div style="display:flex;gap:14px;padding-top:8px"><label class="chk"><input type="radio" name="nc_grade" value="중결함" checked> 중결함</label><label class="chk"><input type="radio" name="nc_grade" value="경결함"> 경결함</label></div></div></div>'+
@@ -1761,7 +1795,7 @@ function buildNcrReportHtml(r){
     '.big td{height:64px;vertical-align:top} .sign{display:flex;justify-content:flex-end;gap:50px;align-items:flex-end;margin-top:24px} .sign img{height:46px;margin-left:10px;vertical-align:bottom}'+
     '.foot{display:flex;justify-content:space-between;margin-top:28px;padding-top:6px;border-top:2px solid #1f3a5f;font-size:11px;color:#333}'+
     '</style></head><body><div class="wrap">'+
-    '<div class="hdr"><h1>부적합품 보고서</h1><table class="hdrbox"><tr><td class="lbl">문서번호</td><td style="text-align:center">'+escHtml(r.docNo)+'</td></tr><tr><td class="lbl">양식번호</td><td style="text-align:center">DMF501-00</td></tr><tr><td class="lbl">제·개정일자</td><td style="text-align:center">2013.04.08</td></tr></table></div>'+
+    '<div class="hdr"><h1>부적합품 보고서</h1><table class="hdrbox"><tr><td class="lbl">문서번호</td><td style="text-align:center">'+escHtml(r.docNo)+'</td></tr><tr><td class="lbl">양식번호</td><td style="text-align:center">AMT-DMF501-00</td></tr><tr><td class="lbl">제·개정일자</td><td style="text-align:center">2013.04.08</td></tr></table></div>'+
     '<table><tr><td class="lbl" style="width:96px">제조업체명</td><td>'+escHtml(r.maker||'')+'</td><td class="lbl" style="width:96px">발견(처리)일</td><td>'+fmtKDate(r.reportDate)+'</td></tr>'+
     '<tr><td class="lbl">품목명</td><td>'+escHtml(r.product)+'</td><td class="lbl">모델명</td><td>'+escHtml(r.model||'')+'</td></tr>'+
     '<tr><td class="lbl">Lot No.</td><td>'+escHtml(r.lotNo)+'</td><td class="lbl">부적합 수량</td><td>'+Number(r.qty||0).toLocaleString()+' EA</td></tr>'+
@@ -1784,10 +1818,10 @@ async function printNcrLedger(){
   let body=''; rows.forEach((r,i)=>{ body+='<tr><td>'+(i+1)+'</td><td>'+escHtml(r.docNo)+'</td><td>'+escHtml(r.reportDate)+'</td><td>'+escHtml(r.product)+'</td><td>'+escHtml(r.lotNo)+'</td><td class="r">'+Number(r.qty||0).toLocaleString()+'</td><td>'+escHtml(r.defectGrade||'')+'</td><td>'+escHtml(r.defectDesc||'')+'</td><td>'+escHtml(r.disposition||'')+'</td><td class="r">'+Number(r.qtyDeducted||0).toLocaleString()+'</td><td>'+escHtml(r.inspector||'')+'</td></tr>'; });
   const w=window.open('','_blank'); if(!w){ toast('팝업이 차단됐습니다. 허용 후 다시 시도하세요'); return; }
   w.document.open();
-  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>부적합품관리대장 DMF501-01</title><style>'+
+  w.document.write('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>부적합품관리대장 AMT-DMF501-01</title><style>'+
     '@page{size:A4 landscape;margin:12mm} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;font-size:11px} h1{font-size:16px;margin:0 0 2px} .sub{color:#555;font-size:11px;margin-bottom:8px}'+
     'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right} .foot{margin-top:14px;text-align:right;font-size:11px}'+
-    '</style></head><body><h1>부적합품관리대장</h1><div class="sub">DMF501-01 · (주)에이엠티코리아 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
+    '</style></head><body><h1>부적합품관리대장</h1><div class="sub">AMT-DMF501-01 · (주)에이엠티코리아 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
     '<table><thead><tr><th>No</th><th>보고서번호</th><th>발견일</th><th>제품</th><th>LOT</th><th>수량</th><th>등급</th><th>부적합내용</th><th>처리구분</th><th>차감수량</th><th>품질책임자</th></tr></thead><tbody>'+body+'</tbody></table>'+
     '<div class="foot">품질책임자 : 강승섭 (인)</div></body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} },400);
