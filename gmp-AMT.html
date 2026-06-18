@@ -436,7 +436,10 @@ async function renderLot(){
     '<div class="card"><div class="card-h"><div class="t">입고 대기 (운영앱 “수입” 자동연동)</div></div>'+
     '<div style="color:var(--muted);font-size:12px;margin-bottom:10px">“LOT 등록”을 누르면 GS1 매트릭스를 스캔해 LOT·제조일·유통기한이 자동 입력됩니다. (폰 카메라 권장)</div>'+
     '<div id="pendingTable"></div></div>'+
-    '<div class="card"><div class="card-h"><div class="t">LOT 목록</div></div><div id="lotTable"></div></div>';
+    '<div class="card"><div class="card-h"><div class="t">LOT 목록</div>'+(canWrite()?'<button class="btn btn-sm" id="manualLotBtn">+ 직접 LOT 등록</button>':'')+'</div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">작년 이월분 등 운영앱 수입 대기에 없는 LOT는 <b>“직접 LOT 등록”</b>으로 넣으세요.</div>'+
+    '<div id="lotTable"></div></div>';
+  if(canWrite() && $('manualLotBtn')) $('manualLotBtn').addEventListener('click', openManualLotModal);
 
   // LOT 실시간 → 입고대기/목록 같이 갱신
   const r=ref(db,'gmp_data/lots');
@@ -686,6 +689,80 @@ function openLotModal(p){
     try{
       await push(ref(db,'gmp_data/lots'), lot);
       logAudit('등록','LOT 등록: '+p.gmpProduct+' / '+lotNo+' '+fmt(qty)+'개');
+      toast('LOT가 등록되었습니다'); m.remove();
+    }catch(e){ toast('저장 실패: '+e.message); }
+  });
+}
+
+async function openManualLotModal(){
+  let prods=[];
+  try{ const pv=(await get(ref(db,'gmp_data/products'))).val()||{}; prods=Object.keys(pv).map(k=>Object.assign({_id:k},pv[k])); }catch(_){}
+  if(!prods.length){ toast('먼저 제품관리에서 제품을 등록하세요'); return; }
+  let opts=''; prods.forEach(p=>{ opts+='<option value="'+escHtml(p._id)+'">'+escHtml(p.name)+(p.model?(' ('+escHtml(p.model)+')'):'')+'</option>'; });
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal"><h3>직접 LOT 등록 <span style="font-size:12px;color:var(--muted);font-weight:400">(작년 이월분 등)</span></h3>'+
+    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 스캔</button>'+
+    '<div style="color:var(--muted);font-size:11px;margin-top:6px;text-align:center">스캔하면 LOT·제조일·유통기한이 자동 입력됩니다 (폰에서)</div></div>'+
+    '<div class="field"><label>제품</label><select id="l_prod">'+opts+'</select></div>'+
+    '<div class="field"><label>LOT 번호</label><input id="l_lot" placeholder="예: 25040728"></div>'+
+    '<div class="row2"><div class="field"><label>제조일자</label><input id="l_pdate" type="date"></div><div class="field"><label>유통기한 <span style="font-size:10px;color:var(--muted)">(비우면 자동)</span></label><input id="l_exp" type="date"></div></div>'+
+    '<div class="row2"><div class="field"><label>입고일</label><input id="l_indate" type="date"></div><div class="field"><label>입고수량(봉투)</label><input id="l_qty" type="number" placeholder="예: 15800"></div></div>'+
+    '<div class="field"><label>표준통관예정보고서번호</label><input id="l_customs" placeholder="예: 2-305-01-25-0021896-5"></div>'+
+    '<div class="field"><label>수입면장번호</label><input id="l_decl" placeholder="예: 11194-25-800666M"></div>'+
+    '<div class="field"><label>GTIN (스캔 시 자동)</label><input id="l_gtin" placeholder="스캔 또는 직접입력"></div>'+
+    '<div id="l_warn" style="color:var(--amber);font-size:12px;min-height:14px"></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="l_cancel">취소</button><button class="btn" id="l_save">LOT 저장</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click',(e)=>{ if(e.target===m) m.remove(); });
+  m.querySelector('#l_cancel').addEventListener('click',()=>m.remove());
+  const selProd=()=> prods.find(x=>x._id===m.querySelector('#l_prod').value)||{};
+  m.querySelector('#l_pdate').addEventListener('change',()=>{
+    const pd=m.querySelector('#l_pdate').value, ex=m.querySelector('#l_exp'); const shelf=(selProd().shelfMonths)||36;
+    if(pd && !ex.value){ ex.value=addMonthsMinus1(pd, shelf); }
+  });
+  m.querySelector('#l_scan').addEventListener('click',()=>{
+    openScanner((g)=>{
+      const shelf=(selProd().shelfMonths)||36;
+      if(g.lot) m.querySelector('#l_lot').value=g.lot;
+      if(g.prodDate) m.querySelector('#l_pdate').value=g.prodDate;
+      if(g.expDate) m.querySelector('#l_exp').value=g.expDate;
+      else if(g.prodDate) m.querySelector('#l_exp').value=addMonthsMinus1(g.prodDate, shelf);
+      if(g.gtin) m.querySelector('#l_gtin').value=g.gtin;
+      const warn=m.querySelector('#l_warn'); let msg='';
+      const known=(selProd().gtins||[]).map(x=>String(x).replace(/^0+/,''));
+      const scanned=String(g.gtin||'').replace(/^0+/,'');
+      if(g.gtin && known.length && known.indexOf(scanned)<0) msg+='⚠️ 스캔한 GTIN이 선택한 제품 등록값과 다릅니다. 제품/박스를 확인하세요. ';
+      if(!g.lot){ msg+='LOT가 자동인식 안 됐어요 — 박스 보고 직접 입력하세요. '; m.querySelector('#l_lot').focus(); }
+      warn.innerHTML = escHtml(msg);
+      toast(g.lot ? '스캔 완료 — 값이 채워졌습니다' : '스캔됨 — LOT는 직접 입력하세요');
+    });
+  });
+  m.querySelector('#l_save').addEventListener('click',async()=>{
+    const prod=selProd();
+    const lotNo=(m.querySelector('#l_lot').value||'').trim();
+    const prodDate=m.querySelector('#l_pdate').value||'';
+    let expiry=m.querySelector('#l_exp').value||'';
+    const inDate=m.querySelector('#l_indate').value||'';
+    const qty=parseInt(m.querySelector('#l_qty').value||'0',10)||0;
+    if(!prod.name){ toast('제품을 선택하세요'); return; }
+    if(!lotNo){ toast('LOT 번호를 입력하세요'); return; }
+    if(!prodDate){ toast('제조일자를 입력하세요'); return; }
+    if(qty<=0){ toast('입고수량을 입력하세요'); return; }
+    if(!expiry) expiry=addMonthsMinus1(prodDate, (prod.shelfMonths)||36);
+    const lot={
+      product:prod.name, productId:prod._id||'', model:prod.model||'',
+      gtin:(m.querySelector('#l_gtin').value||'').trim(),
+      lotNo, prodDate, expiry,
+      customsNo:(m.querySelector('#l_customs').value||'').trim(),
+      importDeclNo:(m.querySelector('#l_decl').value||'').trim(),
+      initialQty:qty, currentQty:qty,
+      srcInvId:'', opProduct:'', inDate,
+      sterile:!!prod.sterile, inspectInStatus:'pending',
+      manual:true, createdAt:Date.now(), createdBy:currentUser.name
+    };
+    try{
+      await push(ref(db,'gmp_data/lots'), lot);
+      logAudit('등록','직접 LOT 등록: '+prod.name+' / '+lotNo+' '+fmt(qty)+'개');
       toast('LOT가 등록되었습니다'); m.remove();
     }catch(e){ toast('저장 실패: '+e.message); }
   });
