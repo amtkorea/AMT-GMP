@@ -1,0 +1,17 @@
+{
+  "name": "AMT GMP 품질관리 시스템",
+  "short_name": "AMT GMP",
+  "description": "(주)에이엠티코리아 수입 의료기기 GMP 품질관리",
+  "start_url": "./gmp-AMT.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f8f7",
+  "theme_color": "#15a36a",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
