@@ -1580,12 +1580,12 @@ async function renderDash(){
   html+='<div class="card"><b style="font-size:13px">LOT 재고 현황</b>';
   if(!lots.length) html+='<div class="empty">등록된 LOT가 없습니다.</div>';
   else{
-    html+='<table style="margin-top:8px"><thead><tr><th>제품</th><th>Model</th><th>LOT</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
+    html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="margin-top:8px"><thead><tr><th>제품</th><th>Model</th><th>LOT</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
     lots.sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))).forEach(l=>{
       const ins=l.inspectInStatus==='done'?(l.inspectInOverall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'):'<span class="pill amber">대기</span>';
       html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.model||'')+'</td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate||'')+'</td><td>'+escHtml(l.expiry||'')+'</td><td style="text-align:right">'+fmt(l.initialQty)+'</td><td style="text-align:right"><b>'+fmt(l.currentQty)+'</b></td><td>'+ins+'</td></tr>';
     });
-    html+='</tbody></table>';
+    html+='</tbody></table></div>';
   }
   html+='</div>';
   $('page').innerHTML=html;
