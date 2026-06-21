@@ -925,14 +925,14 @@ function ledgerRows(){
   lots.forEach(l=>{
     if(!(l.inspectInStatus==='done' && l.inspectInOverall==='pass')) return; // 입고검사 합격 LOT만
     let bal=Number(l.initialQty)||0;
-    out.push({ kind:'in', model:l.model||l.product, lot:l.lotNo, date:l.inDate||l.prodDate||'', inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, qm:l.inspectInInspector||'', bal });
+    out.push({ kind:'in', product:l.product||'', model:l.model||l.product, lot:l.lotNo, date:l.inDate||l.prodDate||'', inDate:l.inDate||l.prodDate||'', inQty:Number(l.initialQty)||0, qm:l.inspectInInspector||'', bal });
     const evs=[];
     ledgerOut.filter(o=> o.lotId===l._id && !o.voided && o.inspectOutStatus==='done' && o.inspectOutOverall==='pass')
-      .forEach(o=>evs.push({ kind:'out', model:o.model||l.model||o.product, date:o.date||'', ord:Number(o.createdAt||0), qty:Number(o.qty)||0, dest:o.dest||'KY 메디칼', qm:o.inspectOutInspector||'' }));
+      .forEach(o=>evs.push({ kind:'out', product:l.product||'', model:o.model||l.model||o.product, date:o.date||'', ord:Number(o.createdAt||0), qty:Number(o.qty)||0, dest:o.dest||'KY 메디칼', qm:o.inspectOutInspector||'' }));
     ledgerReturns.filter(n=> n.lotId===l._id && Number(n.qty)>0)
-      .forEach(n=>evs.push({ kind:'return', model:n.model||l.model||n.product, date:n.returnDate||'', ord:Number(n.createdAt||0), qty:Number(n.qty)||0, reason:n.reason||'', qm:n.inspector||'' }));
+      .forEach(n=>evs.push({ kind:'return', product:l.product||'', model:n.model||l.model||n.product, date:n.returnDate||'', ord:Number(n.createdAt||0), qty:Number(n.qty)||0, reason:n.reason||'', qm:n.inspector||'' }));
     ledgerNcr.filter(n=> n.lotId===l._id && Number(n.qtyDeducted)>0)
-      .forEach(n=>evs.push({ kind:'ncr', model:n.model||l.model||n.product, date:n.reportDate||'', ord:Number(n.createdAt||0), qty:Number(n.qtyDeducted)||0, disposition:n.disposition||'폐기', desc:n.defectDesc||'', qm:n.inspector||'' }));
+      .forEach(n=>evs.push({ kind:'ncr', product:l.product||'', model:n.model||l.model||n.product, date:n.reportDate||'', ord:Number(n.createdAt||0), qty:Number(n.qtyDeducted)||0, disposition:n.disposition||'폐기', desc:n.defectDesc||'', qm:n.inspector||'' }));
     evs.sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || (a.ord-b.ord));
     evs.forEach(e=>{ if(e.kind==='return') bal += Number(e.qty)||0; else bal -= Number(e.qty)||0; e.lot=l.lotNo; e.bal=bal; out.push(e); });
   });
@@ -974,12 +974,13 @@ function drawLedgerTable(){
     note='최근 10건 (전체 '+total+') · 더 보려면 위 기간 설정';
   }
   let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-DMF601-01 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+escHtml(note)+'</span></div>';
-  html+='<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
+  html+='<table><thead><tr><th>No</th><th>품목명</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
   rows.forEach((r,i)=>{
     const c=ledgerCells(r);
     html+='<tr style="background:'+c.bg+'">'+
       '<td>'+(i+1)+'</td>'+
-      '<td><b>'+escHtml(r.model)+'</b></td>'+
+      '<td><b>'+escHtml(r.product||'')+'</b></td>'+
+      '<td>'+escHtml(r.model)+'</td>'+
       '<td>'+escHtml(r.lot)+'</td>'+
       '<td>'+escHtml(c.inDate)+'</td>'+
       '<td style="text-align:right">'+(c.inQty!=null?fmt(c.inQty):'')+'</td>'+
@@ -1001,7 +1002,7 @@ function printLedger(){
   let body='';
   rows.forEach((r,i)=>{ const c=ledgerCells(r);
     body+='<tr>'+
-      '<td>'+(i+1)+'</td><td>'+escHtml(r.model)+'</td><td>'+escHtml(r.lot)+'</td>'+
+      '<td>'+(i+1)+'</td><td>'+escHtml(r.product||'')+'</td><td>'+escHtml(r.model)+'</td><td>'+escHtml(r.lot)+'</td>'+
       '<td>'+escHtml(c.inDate)+'</td><td class="r">'+(c.inQty!=null?Number(c.inQty).toLocaleString():'')+'</td>'+
       '<td>'+escHtml(c.outDate)+'</td><td class="r">'+(c.outQty!=null?Number(c.outQty).toLocaleString():'')+'</td>'+
       '<td class="r">'+(c.scrap!=null?Number(c.scrap).toLocaleString():'')+'</td><td class="r"><b>'+Number(r.bal).toLocaleString()+'</b></td>'+
@@ -1014,7 +1015,7 @@ function printLedger(){
     'table{width:100%;border-collapse:collapse} td,th{border:1px solid #000;padding:4px 6px} th{background:#f1f1f1} .r{text-align:right}'+
     '.foot{margin-top:18px;text-align:right;font-size:12px} .foot img{height:48px;vertical-align:middle;margin-left:8px}'+
     '</style></head><body><h1>입출고관리대장</h1><div class="sub">AMT-DMF601-01 · (주)에이엠티코리아 · 검사 합격·부적합 처리 건 · 출력일 '+new Date().toISOString().slice(0,10)+'</div>'+
-    '<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
+    '<table><thead><tr><th>No</th><th>품목명</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>'+body+'</tbody></table>'+
     '<div class="foot">'+(ledgerSign&&ledgerSign.signature
       ? '품질책임자 : '+escHtml(ledgerSign.by||'')+' <img src="'+ledgerSign.signature+'"> &nbsp; 확인일 '+escHtml(ledgerSign.date||'')
       : '품질책임자 : 강승섭 (인) &nbsp;<span style="color:#999">※ 미서명 — “대장 서명”으로 전자서명 가능</span>')+'</div></body></html>');
