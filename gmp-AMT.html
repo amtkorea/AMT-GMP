@@ -1870,6 +1870,74 @@ async function printNcrLedger(){
 }
 
 /* ── 설정: 사용자관리 ── */
+/* ════════ 백업 / 복원 ════════ */
+const GMP_BACKUP_NODES = ['gmp_data','gmp_audit','gmp_admins','admin_emails','viewer_emails'];
+const BACKUP_RETAIN_DAYS = 1095; // 3년 보관
+const BACKUP_DAILY_DAYS  = 30;   // 최근 30일은 매일, 그 이전은 월 1개만 유지
+
+function downloadBlob(filename, text){
+  const blob=new Blob([text],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 600);
+}
+async function exportGmpData(){
+  if(!canWrite()){ toast('권한이 없습니다'); return; }
+  toast('백업 파일을 만드는 중...');
+  try{
+    const out={ _app:'AMT-GMP', _exportedAt:new Date().toISOString(), _by:currentUser.name, data:{} };
+    for(const n of GMP_BACKUP_NODES){ out.data[n]=(await get(ref(db,n))).val()||null; }
+    downloadBlob('AMT-GMP-backup-'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(out,null,2));
+    logAudit('백업','JSON 내보내기'); toast('백업 파일을 내려받았습니다');
+  }catch(e){ toast('내보내기 실패: '+e.message); }
+}
+function importGmpData(){
+  if(!currentUser || currentUser.role!=='super'){ toast('총괄관리자만 가능합니다'); return; }
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='application/json,.json';
+  inp.addEventListener('change', async ()=>{
+    const f=inp.files&&inp.files[0]; if(!f) return;
+    let obj; try{ obj=JSON.parse(await f.text()); }catch(_){ toast('JSON 파일이 올바르지 않습니다'); return; }
+    if(!obj || !obj.data){ toast('백업 데이터를 찾을 수 없습니다'); return; }
+    if(obj._app!=='AMT-GMP' && !confirm('AMT-GMP 백업 파일이 아닐 수 있습니다. 그래도 복원할까요?')) return;
+    const nodes=Object.keys(obj.data||{}); if(!nodes.length){ toast('복원할 데이터가 없습니다'); return; }
+    if(!confirm('현재 데이터를 백업 파일 내용으로 덮어씁니다.\n('+nodes.join(', ')+')\n계속할까요?')) return;
+    if(prompt("되돌릴 수 없습니다. 진행하려면 '복원' 을 입력하세요:")!=='복원'){ toast('취소되었습니다'); return; }
+    try{
+      for(const n of nodes){ await set(ref(db,n), obj.data[n]); }
+      await logAudit('복원','JSON 가져오기 복원'); toast('복원 완료 — 새로고침합니다'); setTimeout(()=>location.reload(), 900);
+    }catch(e){ toast('복원 실패: '+e.message); }
+  });
+  inp.click();
+}
+async function purgeBackups(){
+  const all=(await get(ref(db,'gmp_backups'))).val()||{};
+  const keys=Object.keys(all).filter(k=>k!=='_meta').sort();           // YYYY-MM-DD 오름차순
+  const now=Date.now();
+  const dDaily=new Date(now-BACKUP_DAILY_DAYS*86400000).toISOString().slice(0,10);
+  const dKeep =new Date(now-BACKUP_RETAIN_DAYS*86400000).toISOString().slice(0,10);
+  const monthKept={};
+  for(const k of keys.slice().reverse()){                              // 최신부터
+    if(k < dKeep){ await set(ref(db,'gmp_backups/'+k), null); continue; } // 3년 초과 → 삭제
+    if(k < dDaily){                                                     // 30일~3년 → 월 1개만
+      const mon=k.slice(0,7);
+      if(monthKept[mon]) await set(ref(db,'gmp_backups/'+k), null);
+      else monthKept[mon]=true;
+    }
+  }
+}
+async function dailyAutoBackup(){
+  if(!canWrite()) return;                       // 조회자는 백업 안 함
+  try{
+    const today=new Date().toISOString().slice(0,10);
+    const last=(await get(ref(db,'gmp_backups/_meta/lastDate'))).val();
+    if(last===today) return;                    // 오늘 이미 백업됨
+    const data=(await get(ref(db,'gmp_data'))).val()||null;
+    await set(ref(db,'gmp_backups/'+today), { ts:Date.now(), by:currentUser.name, data });
+    await set(ref(db,'gmp_backups/_meta/lastDate'), today);
+    await purgeBackups();
+  }catch(e){ /* 백업 실패해도 앱 동작엔 영향 없음 — 조용히 무시 */ }
+}
+
 async function resetTestData(){
   if(!currentUser || currentUser.role!=='super'){ toast('총괄관리자만 가능합니다'); return; }
   if(!confirm('테스트 데이터(LOT·출고·검사성적서·부적합·첨부링크·작업이력)를 모두 삭제합니다.\n제품·사용자·설정은 유지됩니다.\n계속할까요?')) return;
@@ -1889,9 +1957,17 @@ function renderSettings(){
     '<div style="font-size:13px;line-height:1.7">시험 삼아 입력한 <b>LOT·출고·입고/출고검사성적서·부적합품·첨부링크·작업이력(Audit)</b>을 모두 삭제합니다.<br>'+
     '<b>유지</b>: 제품(4종)·사용자·로그인·설정값. <span style="color:#dc2626">되돌릴 수 없습니다.</span></div>'+
     '<div style="margin-top:10px"><button class="btn btn-danger btn-sm" id="resetBtn">테스트 데이터 모두 삭제</button></div></div>' : '';
+  const backup = canWrite() ?
+    '<div class="card" style="margin-top:14px"><div class="card-h"><div class="t">백업 / 복원</div></div>'+
+    '<div style="font-size:13px;line-height:1.7">매일 1회 자동으로 Firebase에 백업됩니다(최근 30일 매일 + 그 이전 월 1개, <b>3년 보관 후 자동 삭제</b>).<br>'+
+    '<b>가장 확실한 보관</b>은 아래 <b>JSON 내보내기</b>로 파일을 받아 PC나 구글드라이브에 두는 것입니다.</div>'+
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm" id="expBtn">⬇ JSON 내보내기</button>'+
+    (currentUser.role==='super'?'<button class="btn btn-ghost btn-sm" id="impBtn">⬆ JSON 가져오기(복원)</button>':'')+'</div></div>' : '';
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">사용자 관리</div><button id="addUserBtn" class="btn btn-sm">+ 사용자 추가</button></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">총괄관리자=모든권한 / <b>품질책임자=입력·검사+서명</b> / 일반관리자=입력·검사(서명 불가, 서명대기로 저장) / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>'+danger;
+    '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">총괄관리자=모든권한 / <b>품질책임자=입력·검사+서명</b> / 일반관리자=입력·검사(서명 불가, 서명대기로 저장) / 조회자=읽기 전용. 이메일·코드로 로그인합니다.</div><div id="userTable"><div class="empty">불러오는 중...</div></div></div>'+backup+danger;
   $('addUserBtn').addEventListener('click',()=>openUserModal());
+  if($('expBtn')) $('expBtn').addEventListener('click',exportGmpData);
+  if($('impBtn')) $('impBtn').addEventListener('click',importGmpData);
   if($('resetBtn')) $('resetBtn').addEventListener('click',resetTestData);
   const r=ref(db,'gmp_admins');
   const cb=onValue(r,(snap)=>{
@@ -1969,7 +2045,7 @@ onAuthStateChanged(auth, async (user)=>{
   if(user && !currentUser){
     try{
       const rec=(await get(ref(db,'gmp_admins/'+emailKey(user.email)))).val();
-      if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); }
+      if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); dailyAutoBackup(); }
       else { await signOut(auth); showLogin(); }
     }catch(e){ showLogin(); }
   }else if(!user){ currentUser=null; showLogin(); }
