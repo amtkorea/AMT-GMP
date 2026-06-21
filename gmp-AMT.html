@@ -205,6 +205,38 @@ function escHtml(s){
 function emailKey(email){ return String(email||'').trim().toLowerCase().replace(/\./g,','); }
 function $(id){ return document.getElementById(id); }
 function fmt(n){ return Number(n||0).toLocaleString('ko-KR'); }
+
+/* ── 목록: 최근 N개 / 기간 조회 공통 헬퍼 ── */
+let _filt={};
+function _daysLabel(d){ if(d>=365){ return Math.round(d/365)+'년'; } if(d>=30){ return Math.round(d/30)+'개월'; } return d+'일'; }
+function _limit(items, dateOf, prefix, opt){
+  const arr=items.slice().sort((a,b)=>String(dateOf(b)||'').localeCompare(String(dateOf(a)||''))); // 최신순
+  const total=arr.length;
+  const f=(_filt[prefix]&&_filt[prefix].from)||'', t=(_filt[prefix]&&_filt[prefix].to)||'';
+  if(f||t){ const lo=f||'0000-00-00', hi=t||'9999-12-31';
+    const rows=arr.filter(x=>{ const d=String(dateOf(x)||'').slice(0,10); return d>=lo && d<=hi; });
+    return { rows, total, info:'기간 '+(f||'…')+' ~ '+(t||'…')+' · '+rows.length+'건 (전체 '+total+')' }; }
+  if(opt.days){ const cut=new Date(Date.now()-opt.days*86400000).toISOString().slice(0,10);
+    const rows=arr.filter(x=>String(dateOf(x)||'').slice(0,10) >= cut);
+    return { rows, total, info:'최근 '+_daysLabel(opt.days)+' · '+rows.length+'건 (전체 '+total+') · 더 보려면 기간 설정' }; }
+  const n=opt.count||10;
+  return { rows:arr.slice(0,n), total, info:'최근 '+Math.min(n,total)+'개 표시 (전체 '+total+') · 더 보려면 기간 설정' };
+}
+function _dateBar(prefix, info){
+  const f=(_filt[prefix]&&_filt[prefix].from)||'', t=(_filt[prefix]&&_filt[prefix].to)||'';
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:12px;color:var(--muted)">'+
+    '<span>'+escHtml(info)+'</span><span style="flex:1;min-width:8px"></span>'+
+    '<input type="date" id="'+prefix+'_from" value="'+f+'" style="padding:3px 6px;font-size:12px"> <span>~</span> '+
+    '<input type="date" id="'+prefix+'_to" value="'+t+'" style="padding:3px 6px;font-size:12px">'+
+    ((f||t)?' <button class="btn btn-ghost btn-sm" id="'+prefix+'_clr">최근만 보기</button>':'')+'</div>';
+}
+function _bindDateBar(prefix, redraw){
+  const fi=$(prefix+'_from'), ti=$(prefix+'_to'), cl=$(prefix+'_clr');
+  const upd=()=>{ _filt[prefix]={from:(fi&&fi.value)||'', to:(ti&&ti.value)||''}; redraw(); };
+  if(fi) fi.addEventListener('change',upd);
+  if(ti) ti.addEventListener('change',upd);
+  if(cl) cl.addEventListener('click',()=>{ _filt[prefix]={from:'',to:''}; redraw(); });
+}
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('show'),2400); }
 // 제조일 + 개월 - 1일 (라벨 "제조일로부터 N년까지" 규칙)
 function addMonthsMinus1(dateStr, months){
@@ -471,11 +503,13 @@ async function renderLot(){
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
     const lots=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    _lotCache=lots;
     drawPending(lots);
     drawLotList(lots);
   },(err)=>{ $('lotTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   productsUnsub=()=>off(r,'value',cb);
 }
+let _lotCache=[];
 
 function drawPending(lots){
   if(amtKy.status!=='ok'){ $('pendingTable').innerHTML='<div class="empty">운영앱 연결 시 수입 건이 표시됩니다.</div>'; return; }
@@ -488,21 +522,23 @@ function drawPending(lots){
     });
   });
   if(!rows.length){ $('pendingTable').innerHTML='<div class="empty">대기 중인 수입 건이 없습니다. (모두 LOT 등록됨)</div>'; return; }
-  let html='<table><thead><tr><th>수입일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>메모</th><th></th></tr></thead><tbody>';
-  rows.forEach((r,idx)=>{
+  const lim=_limit(rows, r=>r.date, 'lotPend', {count:5}); const shown=lim.rows;
+  let html=_dateBar('lotPend', lim.info)+'<table><thead><tr><th>수입일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>메모</th><th></th></tr></thead><tbody>';
+  shown.forEach((r,idx)=>{
     html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.gmpProduct)+'</b></td><td>'+fmt(r.qty)+'</td><td>'+escHtml(r.memo)+'</td>'+
       '<td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-reg="'+idx+'">LOT 등록</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>';
   });
   html+='</tbody></table>';
   const wrap=$('pendingTable'); wrap.innerHTML=html;
-  if(canWrite()) wrap.querySelectorAll('[data-reg]').forEach(b=>b.addEventListener('click',()=>openLotModal(rows[parseInt(b.getAttribute('data-reg'),10)])));
+  _bindDateBar('lotPend', ()=>drawPending(_lotCache));
+  if(canWrite()) wrap.querySelectorAll('[data-reg]').forEach(b=>b.addEventListener('click',()=>openLotModal(shown[parseInt(b.getAttribute('data-reg'),10)])));
 }
 
 function drawLotList(lots){
   if(!lots.length){ $('lotTable').innerHTML='<div class="empty">아직 등록된 LOT가 없습니다.</div>'; return; }
-  lots.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
-  let html='<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
-  lots.forEach(l=>{
+  const lim=_limit(lots, l=>l.inDate||l.prodDate, 'lotList', {count:5}); const shown=lim.rows;
+  let html=_dateBar('lotList', lim.info)+'<table><thead><tr><th>제품</th><th>LOT번호</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
+  shown.forEach(l=>{
     let ins;
     if(l.inspectInStatus==='done') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill green">완료</span><button class="btn btn-ghost btn-sm" data-ipdf="'+escHtml(l._id)+'">성적서</button></div>';
     else if(l.inspectInStatus==='await') ins='<div class="actions-cell" style="justify-content:flex-start"><span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>'+(canSign()?'<button class="btn btn-sm" data-isign="'+escHtml(l._id)+'">서명하기</button>':'')+'</div>';
@@ -512,10 +548,11 @@ function drawLotList(lots){
   });
   html+='</tbody></table>';
   const wrap=$('lotTable'); wrap.innerHTML=html;
-  wrap.querySelectorAll('[data-iins]').forEach(b=>b.addEventListener('click',()=>renderInspectInForm(lots.find(x=>x._id===b.getAttribute('data-iins')))));
-  wrap.querySelectorAll('[data-ipdf]').forEach(b=>b.addEventListener('click',()=>openInspectPdfByLot(lots.find(x=>x._id===b.getAttribute('data-ipdf')))));
-  wrap.querySelectorAll('[data-isign]').forEach(b=>b.addEventListener('click',()=>signLotInspectIn(lots.find(x=>x._id===b.getAttribute('data-isign')))));
-  wrap.querySelectorAll('[data-ledit]').forEach(b=>b.addEventListener('click',()=>openLotEditModal(lots.find(x=>x._id===b.getAttribute('data-ledit')))));
+  _bindDateBar('lotList', ()=>drawLotList(_lotCache));
+  wrap.querySelectorAll('[data-iins]').forEach(b=>b.addEventListener('click',()=>renderInspectInForm(_lotCache.find(x=>x._id===b.getAttribute('data-iins')))));
+  wrap.querySelectorAll('[data-ipdf]').forEach(b=>b.addEventListener('click',()=>openInspectPdfByLot(_lotCache.find(x=>x._id===b.getAttribute('data-ipdf')))));
+  wrap.querySelectorAll('[data-isign]').forEach(b=>b.addEventListener('click',()=>signLotInspectIn(_lotCache.find(x=>x._id===b.getAttribute('data-isign')))));
+  wrap.querySelectorAll('[data-ledit]').forEach(b=>b.addEventListener('click',()=>openLotEditModal(_lotCache.find(x=>x._id===b.getAttribute('data-ledit')))));
 }
 
 function openLotEditModal(l){
@@ -927,9 +964,16 @@ function ledgerCells(r){
 }
 function drawLedgerTable(){
   const el=$('ledgerTable'); if(!el) return;
-  const rows=ledgerFiltered();
+  let rows=ledgerFiltered();
   if(!rows.length){ el.innerHTML='<div class="empty">검사 합격된 입출고 건이 없습니다. (입고검사·출고검사 합격 시 표시)</div>'; return; }
-  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-DMF601-01 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+rows.length+'행</span></div>';
+  const fFrom=($('lg_from')&&$('lg_from').value)||'', fTo=($('lg_to')&&$('lg_to').value)||'';
+  const total=rows.length; let note=total+'행';
+  if(!fFrom && !fTo && total>10){
+    const recent=new Set(rows.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,10));
+    rows=rows.filter(r=>recent.has(r));
+    note='최근 10건 (전체 '+total+') · 더 보려면 위 기간 설정';
+  }
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">AMT-DMF601-01 입출고관리대장 <span style="color:var(--muted);font-weight:400">(검사 합격·부적합 처리 건 표시)</span></b><span style="color:var(--muted);font-size:12px">'+escHtml(note)+'</span></div>';
   html+='<table><thead><tr><th>No</th><th>Model명</th><th>LOT</th><th>입고일</th><th>입고수량</th><th>출고일</th><th>출고수량</th><th>폐기수량</th><th>재고수량</th><th>출고처</th><th>품질책임자 확인</th><th>비고</th></tr></thead><tbody>';
   rows.forEach((r,i)=>{
     const c=ledgerCells(r);
@@ -986,12 +1030,14 @@ function drawOutPending(){
   const rows=[];
   trades.forEach(t=>{ if(Number(t.qty)<=0) return; gmpProductsFor(t.product).forEach(gp=>{ if(done.has(String(t.id)+'|'+gp)) return; if(ignoredTrades.has(igKey(t.id,gp))) return; rows.push({srcTradeId:t.id, opProduct:t.product, product:gp, qty:t.qty, date:t.date, memo:t.memo||''}); }); });
   if(!rows.length){ el.innerHTML='<div class="empty">대기 중인 출고 건이 없습니다. (모두 처리됨)</div>'; return; }
-  let html='<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
-  rows.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
+  const lim=_limit(rows, r=>r.date, 'outPend', {count:10}); const shown=lim.rows;
+  let html=_dateBar('outPend', lim.info)+'<table><thead><tr><th>거래일</th><th>운영앱 제품</th><th>→ GMP 제품</th><th>수량(봉투)</th><th>출고처</th><th>메모</th><th></th></tr></thead><tbody>';
+  shown.forEach((r,idx)=>{ html+='<tr><td>'+escHtml(r.date)+'</td><td>'+escHtml(r.opProduct)+'</td><td><b>'+escHtml(r.product)+'</b></td><td>'+fmt(r.qty)+'</td><td>KY 메디칼</td><td>'+escHtml(r.memo)+'</td><td><div class="actions-cell">'+(canWrite()?'<button class="btn btn-sm" data-out="'+idx+'">출고 처리</button>':'<span class="pill amber">대기</span>')+'</div></td></tr>'; });
   html+='</tbody></table>';
   el.innerHTML=html;
+  _bindDateBar('outPend', drawOutPending);
   if(canWrite()){
-    el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(rows[parseInt(b.getAttribute('data-out'),10)])));
+    el.querySelectorAll('[data-out]').forEach(b=>b.addEventListener('click',()=>openOutModal(shown[parseInt(b.getAttribute('data-out'),10)])));
   }
 }
 
@@ -1058,8 +1104,8 @@ function outReturned(o){ return ledgerReturns.filter(r=>r.outboundId===o._id).re
 function drawOutboundList(){
   const el=$('outList'); if(!el) return;
   if(!ledgerOut.length){ el.innerHTML='<div class="empty">출고 기록이 없습니다.</div>'; return; }
-  const rows=ledgerOut.slice().sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
-  let html='<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
+  const lim=_limit(ledgerOut, o=>o.date, 'outRec', {count:10}); const rows=lim.rows;
+  let html=_dateBar('outRec', lim.info)+'<table><thead><tr><th>출고일</th><th>제품</th><th>LOT번호</th><th>수량</th><th>출고처</th><th>출고검사</th>'+(canWrite()?'<th>관리</th>':'')+'</tr></thead><tbody>';
   rows.forEach(o=>{
     let ins, manage='', rowStyle='';
     const qty=Number(o.qty)||0, returned=outReturned(o), remaining=qty-returned;
@@ -1086,6 +1132,7 @@ function drawOutboundList(){
   });
   html+='</tbody></table>';
   el.innerHTML=html;
+  _bindDateBar('outRec', drawOutboundList);
   el.querySelectorAll('[data-oins]').forEach(b=>b.addEventListener('click',()=>renderInspectOutForm(rows.find(x=>x._id===b.getAttribute('data-oins')))));
   el.querySelectorAll('[data-osign]').forEach(b=>b.addEventListener('click',()=>signOutInspect(rows.find(x=>x._id===b.getAttribute('data-osign')))));
   el.querySelectorAll('[data-opdf]').forEach(b=>b.addEventListener('click',()=>openInspectOutPdf(rows.find(x=>x._id===b.getAttribute('data-opdf')))));
@@ -1393,29 +1440,35 @@ async function openInspectPdfByLot(lot){
   printInspectIn(Object.assign({_id:lot.inspectInId}, rec));
 }
 
+let _insInCache=[];
 function renderInsInList(){
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">입고검사성적서 (AMT-DMF301-00)</div></div><div id="insInTable"><div class="empty">불러오는 중...</div></div></div>';
   const r=ref(db,'gmp_data/inspectIn');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
-    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
-    if(!rows.length){ $('insInTable').innerHTML='<div class="empty">아직 작성된 입고검사성적서가 없습니다. (LOT 관리 · 입고에서 “입고검사 작성”)</div>'; return; }
-    rows.sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
-    let html='<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
-    rows.forEach(x=>{
-      const await_ = !(x.signStatus==='signed' || x.signature);
-      const ov = await_ ? '<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>' : (x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>');
-      const act = await_
-        ? (canSign()?'<button class="btn btn-sm" data-sign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">품질책임자 서명 대기</span>')
-        : '<button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button>';
-      html+='<tr><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell">'+act+'</div></td></tr>';
-    });
-    html+='</tbody></table>';
-    const wrap=$('insInTable'); wrap.innerHTML=html;
-    wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectIn(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
-    wrap.querySelectorAll('[data-sign]').forEach(b=>b.addEventListener('click',()=>openSignModal('inspectIn', rows.find(z=>z._id===b.getAttribute('data-sign')))));
+    _insInCache=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    drawInsInList();
   },(err)=>{ $('insInTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
+}
+function drawInsInList(){
+  if(!$('insInTable')) return;
+  if(!_insInCache.length){ $('insInTable').innerHTML='<div class="empty">아직 작성된 입고검사성적서가 없습니다. (LOT 관리 · 입고에서 “입고검사 작성”)</div>'; return; }
+  const lim=_limit(_insInCache, x=>x.inspectDate, 'insIn', {count:10}); const rows=lim.rows;
+  let html=_dateBar('insIn', lim.info)+'<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
+  rows.forEach(x=>{
+    const await_ = !(x.signStatus==='signed' || x.signature);
+    const ov = await_ ? '<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>' : (x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>');
+    const act = await_
+      ? (canSign()?'<button class="btn btn-sm" data-sign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">품질책임자 서명 대기</span>')
+      : '<button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button>';
+    html+='<tr><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell">'+act+'</div></td></tr>';
+  });
+  html+='</tbody></table>';
+  const wrap=$('insInTable'); wrap.innerHTML=html;
+  _bindDateBar('insIn', drawInsInList);
+  wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectIn(_insInCache.find(z=>z._id===b.getAttribute('data-pdf')))));
+  wrap.querySelectorAll('[data-sign]').forEach(b=>b.addEventListener('click',()=>openSignModal('inspectIn', _insInCache.find(z=>z._id===b.getAttribute('data-sign')))));
 }
 
 /* ════════ 출고검사성적서 (2-D-2) ════════ */
@@ -1514,26 +1567,32 @@ async function openInspectOutPdf(ob){
   if(ob.lotId){ try{ const lot=(await get(ref(db,'gmp_data/lots/'+ob.lotId))).val()||{}; rec.customsNo=lot.customsNo||rec.customsNo||''; rec.importDeclNo=lot.importDeclNo||rec.importDeclNo||''; }catch(_){} }
   printInspectOut(Object.assign({_id:ob.inspectOutId}, rec));
 }
+let _insOutCache=[];
 function renderInsOutList(){
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">출고검사성적서 (AMT-DMF301-01)</div></div><div id="insOutTable"><div class="empty">불러오는 중...</div></div></div>';
   const r=ref(db,'gmp_data/inspectOut');
   const cb=onValue(r,(snap)=>{
     const val=snap.val()||{};
-    const rows=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
-    if(!rows.length){ $('insOutTable').innerHTML='<div class="empty">아직 작성된 출고검사성적서가 없습니다. (입출고관리대장 → 출고 기록에서 “출고검사 작성”)</div>'; return; }
-    rows.sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
-    let html='<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
-    rows.forEach(x=>{ const await_=!x.voided && !(x.signStatus==='signed' || x.signature);
-      const ov=x.voided?'<span class="pill" style="background:#e5e7eb;color:#6b7280">취소됨</span>':(await_?'<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>':(x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'));
-      const rs=x.voided?' style="color:#9ca3af;text-decoration:line-through"':'';
-      const act = x.voided ? '' : (await_ ? (canSign()?'<button class="btn btn-sm" data-sign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">품질책임자 서명 대기</span>') : '<button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button>');
-      html+='<tr'+rs+'><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell">'+act+'</div></td></tr>'; });
-    html+='</tbody></table>';
-    const wrap=$('insOutTable'); wrap.innerHTML=html;
-    wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectOut(rows.find(z=>z._id===b.getAttribute('data-pdf')))));
-    wrap.querySelectorAll('[data-sign]').forEach(b=>b.addEventListener('click',()=>openSignModal('inspectOut', rows.find(z=>z._id===b.getAttribute('data-sign')))));
+    _insOutCache=Object.keys(val).map(k=>Object.assign({_id:k},val[k]));
+    drawInsOutList();
   },(err)=>{ $('insOutTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
+}
+function drawInsOutList(){
+  if(!$('insOutTable')) return;
+  if(!_insOutCache.length){ $('insOutTable').innerHTML='<div class="empty">아직 작성된 출고검사성적서가 없습니다. (입출고관리대장 → 출고 기록에서 “출고검사 작성”)</div>'; return; }
+  const lim=_limit(_insOutCache, x=>x.inspectDate||x.outDate, 'insOut', {count:10}); const rows=lim.rows;
+  let html=_dateBar('insOut', lim.info)+'<table><thead><tr><th>문서번호</th><th>제품</th><th>모델</th><th>LOT</th><th>수량</th><th>검사일</th><th>시료(문자/크기)</th><th>종합판정</th><th></th></tr></thead><tbody>';
+  rows.forEach(x=>{ const await_=!x.voided && !(x.signStatus==='signed' || x.signature);
+    const ov=x.voided?'<span class="pill" style="background:#e5e7eb;color:#6b7280">취소됨</span>':(await_?'<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>':(x.overall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'));
+    const rs=x.voided?' style="color:#9ca3af;text-decoration:line-through"':'';
+    const act = x.voided ? '' : (await_ ? (canSign()?'<button class="btn btn-sm" data-sign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">품질책임자 서명 대기</span>') : '<button class="btn btn-ghost btn-sm" data-pdf="'+escHtml(x._id)+'">성적서 PDF</button>');
+    html+='<tr'+rs+'><td>'+escHtml(x.docNo)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.model)+'</td><td>'+escHtml(x.lotNo)+'</td><td>'+fmt(x.qty)+'</td><td>'+escHtml(x.inspectDate)+'</td><td>'+escHtml((x.sampleCode||'')+' / '+(x.sampleSize||''))+'</td><td>'+ov+'</td><td><div class="actions-cell">'+act+'</div></td></tr>'; });
+  html+='</tbody></table>';
+  const wrap=$('insOutTable'); wrap.innerHTML=html;
+  _bindDateBar('insOut', drawInsOutList);
+  wrap.querySelectorAll('[data-pdf]').forEach(b=>b.addEventListener('click',()=>printInspectOut(_insOutCache.find(z=>z._id===b.getAttribute('data-pdf')))));
+  wrap.querySelectorAll('[data-sign]').forEach(b=>b.addEventListener('click',()=>openSignModal('inspectOut', _insOutCache.find(z=>z._id===b.getAttribute('data-sign')))));
 }
 
 /* ════════ 대시보드 ════════ */
@@ -1580,8 +1639,10 @@ async function renderDash(){
   html+='<div class="card"><b style="font-size:13px">LOT 재고 현황</b>';
   if(!lots.length) html+='<div class="empty">등록된 LOT가 없습니다.</div>';
   else{
-    html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="margin-top:8px"><thead><tr><th>제품</th><th>Model</th><th>LOT</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
-    lots.sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))).forEach(l=>{
+    const lim=_limit(lots, l=>l.inDate||l.prodDate, 'dashLot', {count:10}); const shown=lim.rows;
+    html+='<div style="margin-top:8px">'+_dateBar('dashLot', lim.info)+'</div>';
+    html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="margin-top:2px"><thead><tr><th>제품</th><th>Model</th><th>LOT</th><th>제조일</th><th>유통기한</th><th>입고수량</th><th>현재재고</th><th>입고검사</th></tr></thead><tbody>';
+    shown.forEach(l=>{
       const ins=l.inspectInStatus==='done'?(l.inspectInOverall==='pass'?'<span class="pill green">합격</span>':'<span class="pill" style="background:#fee2e2;color:#dc2626">불합격</span>'):'<span class="pill amber">대기</span>';
       html+='<tr><td><b>'+escHtml(l.product)+'</b></td><td>'+escHtml(l.model||'')+'</td><td>'+escHtml(l.lotNo)+'</td><td>'+escHtml(l.prodDate||'')+'</td><td>'+escHtml(l.expiry||'')+'</td><td style="text-align:right">'+fmt(l.initialQty)+'</td><td style="text-align:right"><b>'+fmt(l.currentQty)+'</b></td><td>'+ins+'</td></tr>';
     });
@@ -1589,6 +1650,7 @@ async function renderDash(){
   }
   html+='</div>';
   $('page').innerHTML=html;
+  _bindDateBar('dashLot', renderDash);
 }
 
 /* ════════ LOT 추적조회 ════════ */
@@ -1597,12 +1659,15 @@ async function renderTrace(){
   let lots=[];
   try{ const lv=(await get(ref(db,'gmp_data/lots'))).val()||{}; lots=Object.keys(lv).map(k=>Object.assign({_id:k},lv[k])).sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))); }
   catch(e){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(e.message)+'</div></div>'; return; }
+  const lim=_limit(lots, l=>l.inDate||l.prodDate, 'trLot', {days:365});
   let opts='<option value="">— LOT 선택 —</option>';
-  lots.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+'</option>'; });
+  lim.rows.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+'</option>'; });
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">LOT 추적조회</div></div>'+
+    _dateBar('trLot', lim.info)+
     '<div class="field" style="max-width:400px"><label>LOT 선택</label><select id="tr_lot">'+opts+'</select></div>'+
     '<div id="trResult"></div></div>';
   $('tr_lot').addEventListener('change',()=>traceShow(lots.find(x=>x._id===$('tr_lot').value)));
+  _bindDateBar('trLot', renderTrace);
 }
 async function traceShow(lot){
   const el=$('trResult'); if(!el) return;
@@ -1636,19 +1701,24 @@ async function traceShow(lot){
 }
 
 /* ════════ Audit Trail ════════ */
+let _auditCache=[];
 function renderAudit(){
-  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">Audit Trail <span style="color:var(--muted);font-weight:400;font-size:12px">최근 300건</span></div></div><div id="auditTable"><div class="empty">불러오는 중...</div></div></div>';
+  $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">Audit Trail</div></div><div id="auditTable"><div class="empty">불러오는 중...</div></div></div>';
   const r=ref(db,'gmp_audit');
-  const cb=onValue(r,(snap)=>{
-    const v=snap.val()||{};
-    let rows=Object.keys(v).map(k=>v[k]).sort((a,b)=>Number(b.ts||0)-Number(a.ts||0)).slice(0,300);
-    if(!rows.length){ $('auditTable').innerHTML='<div class="empty">기록이 없습니다.</div>'; return; }
-    let html='<table><thead><tr><th>시각</th><th>사용자</th><th>작업</th><th>내용</th></tr></thead><tbody>';
-    rows.forEach(x=>{ const d=new Date(Number(x.ts||0)); const ts=isNaN(d.getTime())?'':d.toLocaleString('ko-KR'); html+='<tr><td style="white-space:nowrap">'+escHtml(ts)+'</td><td>'+escHtml(x.user||'')+'</td><td><span class="pill">'+escHtml(x.action||'')+'</span></td><td>'+escHtml(x.detail||'')+'</td></tr>'; });
-    html+='</tbody></table>';
-    $('auditTable').innerHTML=html;
-  },(err)=>{ $('auditTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
+  const cb=onValue(r,(snap)=>{ const v=snap.val()||{}; _auditCache=Object.keys(v).map(k=>v[k]); drawAudit(); },(err)=>{ $('auditTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
+}
+function drawAudit(){
+  if(!$('auditTable')) return;
+  if(!_auditCache.length){ $('auditTable').innerHTML='<div class="empty">기록이 없습니다.</div>'; return; }
+  const sorted=_auditCache.slice().sort((a,b)=>Number(b.ts||0)-Number(a.ts||0));
+  const lim=_limit(sorted, x=>new Date(Number(x.ts||0)).toISOString().slice(0,10), 'audit', {days:30});
+  const rows=lim.rows.slice(0,1000);
+  let html=_dateBar('audit', lim.info)+'<table><thead><tr><th>시각</th><th>사용자</th><th>작업</th><th>내용</th></tr></thead><tbody>';
+  rows.forEach(x=>{ const d=new Date(Number(x.ts||0)); const ts=isNaN(d.getTime())?'':d.toLocaleString('ko-KR'); html+='<tr><td style="white-space:nowrap">'+escHtml(ts)+'</td><td>'+escHtml(x.user||'')+'</td><td><span class="pill">'+escHtml(x.action||'')+'</span></td><td>'+escHtml(x.detail||'')+'</td></tr>'; });
+  html+='</tbody></table>';
+  $('auditTable').innerHTML=html;
+  _bindDateBar('audit', drawAudit);
 }
 
 /* ════════ 첨부파일관리 (Google Drive 업로드 via GAS) ════════ */
@@ -1666,16 +1736,18 @@ async function renderFiles(){
   let lots=[];
   try{ const lv=(await get(ref(db,'gmp_data/lots'))).val()||{}; lots=Object.keys(lv).map(k=>Object.assign({_id:k},lv[k])).sort((a,b)=>String(b.inDate||b.prodDate||'').localeCompare(String(a.inDate||a.prodDate||''))); }
   catch(e){ $('page').innerHTML='<div class="card"><div class="empty">'+escHtml(e.message)+'</div></div>'; return; }
+  const lim=_limit(lots, l=>l.inDate||l.prodDate, 'flLot', {days:365});
   let opts='<option value="">— LOT 선택 —</option>';
-  lots.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+'</option>'; });
+  lim.rows.forEach(l=>{ opts+='<option value="'+escHtml(l._id)+'">'+escHtml(l.product)+' / '+escHtml(l.lotNo)+'</option>'; });
   const cfgOk=!!(cfg.driveUploadUrl && cfg.uploadToken);
   const setupNote = (canWrite()&&!cfgOk) ? '<div class="banner warn">⚠️ 업로드 설정이 필요합니다. (Firebase <b>amt_config</b>에 driveUploadUrl·uploadToken 설정, GAS 스크립트 속성에 ROOT_FOLDER_ID·UPLOAD_TOKEN 설정) 보기·다운로드는 설정 없이도 됩니다.</div>' : '';
   $('page').innerHTML='<div class="card"><div class="card-h"><div class="t">첨부파일관리</div></div>'+
     '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">표준통관예정보고서·수입신고필증 등 PDF를 LOT에 첨부합니다. 파일은 회사 Google Drive에 저장되고, 여기에는 보기 링크만 보관됩니다.</div>'+
-    setupNote+
+    setupNote+ _dateBar('flLot', lim.info)+
     '<div class="field" style="max-width:400px"><label>LOT 선택</label><select id="fl_lot">'+opts+'</select></div>'+
     '<div id="flBox"></div></div>';
   $('fl_lot').addEventListener('change',()=>filesForLot(cfg, lots.find(x=>x._id===$('fl_lot').value)));
+  _bindDateBar('flLot', renderFiles);
 }
 function filesForLot(cfg, lot){
   const box=$('flBox'); if(!box) return;
@@ -1750,20 +1822,27 @@ function renderNcr(){
   if($('nc_print')) $('nc_print').addEventListener('click',printNcrLedger);
   const r=ref(db,'gmp_data/nonconformities');
   const cb=onValue(r,(snap)=>{
-    const v=snap.val()||{}; const rows=Object.keys(v).map(k=>Object.assign({_id:k},v[k])).sort((a,b)=>String(b.docNo||'').localeCompare(String(a.docNo||'')));
-    if(!rows.length){ $('ncTable').innerHTML='<div class="empty">등록된 부적합품이 없습니다.</div>'; return; }
-    let html='<table><thead><tr><th>보고서번호</th><th>발견일</th><th>제품</th><th>LOT</th><th>수량</th><th>등급</th><th>부적합내용</th><th>처리</th><th>차감/상태</th><th></th></tr></thead><tbody>';
-    rows.forEach(x=>{ const await_=!(x.signStatus==='signed' || x.signature);
-      const dp='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(x.disposition||'')+'</span>';
-      const st = await_ ? '<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>' : '<span style="color:#dc2626">'+fmt(x.qtyDeducted||0)+'</span>';
-      const act = await_ ? (canSign()?'<button class="btn btn-sm" data-ncsign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">서명 대기</span>') : '<button class="btn btn-ghost btn-sm" data-ncpdf="'+escHtml(x._id)+'">보고서</button>';
-      html+='<tr><td>'+escHtml(x.docNo)+'</td><td>'+escHtml(x.reportDate)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.lotNo)+'</td><td style="text-align:right">'+fmt(x.qty)+'</td><td>'+escHtml(x.defectGrade||'')+'</td><td>'+escHtml(x.defectDesc||'')+'</td><td>'+dp+'</td><td style="text-align:right">'+st+'</td><td>'+act+'</td></tr>'; });
-    html+='</tbody></table>';
-    const w=$('ncTable'); w.innerHTML=html;
-    w.querySelectorAll('[data-ncpdf]').forEach(b=>b.addEventListener('click',()=>printNcrReport(rows.find(z=>z._id===b.getAttribute('data-ncpdf')))));
-    w.querySelectorAll('[data-ncsign]').forEach(b=>b.addEventListener('click',()=>openSignModal('ncr', rows.find(z=>z._id===b.getAttribute('data-ncsign')))));
+    const v=snap.val()||{}; _ncCache=Object.keys(v).map(k=>Object.assign({_id:k},v[k]));
+    drawNcrList();
   },(err)=>{ $('ncTable').innerHTML='<div class="empty">'+escHtml(err.message)+'</div>'; });
   usersUnsub=()=>off(r,'value',cb);
+}
+let _ncCache=[];
+function drawNcrList(){
+  if(!$('ncTable')) return;
+  if(!_ncCache.length){ $('ncTable').innerHTML='<div class="empty">등록된 부적합품이 없습니다.</div>'; return; }
+  const lim=_limit(_ncCache, x=>x.reportDate, 'ncr', {days:730}); const rows=lim.rows;
+  let html=_dateBar('ncr', lim.info)+'<table><thead><tr><th>보고서번호</th><th>발견일</th><th>제품</th><th>LOT</th><th>수량</th><th>등급</th><th>부적합내용</th><th>처리</th><th>차감/상태</th><th></th></tr></thead><tbody>';
+  rows.forEach(x=>{ const await_=!(x.signStatus==='signed' || x.signature);
+    const dp='<span class="pill" style="background:#fee2e2;color:#dc2626">'+escHtml(x.disposition||'')+'</span>';
+    const st = await_ ? '<span class="pill" style="background:#fef3c7;color:#b45309">서명대기</span>' : '<span style="color:#dc2626">'+fmt(x.qtyDeducted||0)+'</span>';
+    const act = await_ ? (canSign()?'<button class="btn btn-sm" data-ncsign="'+escHtml(x._id)+'">서명하기</button>':'<span style="color:var(--muted);font-size:12px">서명 대기</span>') : '<button class="btn btn-ghost btn-sm" data-ncpdf="'+escHtml(x._id)+'">보고서</button>';
+    html+='<tr><td>'+escHtml(x.docNo)+'</td><td>'+escHtml(x.reportDate)+'</td><td><b>'+escHtml(x.product)+'</b></td><td>'+escHtml(x.lotNo)+'</td><td style="text-align:right">'+fmt(x.qty)+'</td><td>'+escHtml(x.defectGrade||'')+'</td><td>'+escHtml(x.defectDesc||'')+'</td><td>'+dp+'</td><td style="text-align:right">'+st+'</td><td>'+act+'</td></tr>'; });
+  html+='</tbody></table>';
+  const w=$('ncTable'); w.innerHTML=html;
+  _bindDateBar('ncr', drawNcrList);
+  w.querySelectorAll('[data-ncpdf]').forEach(b=>b.addEventListener('click',()=>printNcrReport(_ncCache.find(z=>z._id===b.getAttribute('data-ncpdf')))));
+  w.querySelectorAll('[data-ncsign]').forEach(b=>b.addEventListener('click',()=>openSignModal('ncr', _ncCache.find(z=>z._id===b.getAttribute('data-ncsign')))));
 }
 async function renderNcrForm(){
   if(productsUnsub){ productsUnsub(); productsUnsub=null; }
