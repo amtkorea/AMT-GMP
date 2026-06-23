@@ -664,8 +664,8 @@ async function openScanner(onResult){
         ctl.appendChild(z);
         const zi=z.querySelector('#scanZoom'), zv=z.querySelector('#scanZoomV');
         zi.addEventListener('input', async()=>{ try{ await track.applyConstraints({advanced:[{zoom:Number(zi.value)}]}); zv.textContent=Number(zi.value).toFixed(1)+'x'; }catch(_){} });
-        // 작은 코드 대비: 줌 여유가 있으면 처음부터 2배로 시작
-        if(mx>=1.8){ const iz=Math.min(2,mx); try{ await track.applyConstraints({advanced:[{zoom:iz}]}); }catch(_){} zi.value=iz; zv.textContent=Number(iz).toFixed(1)+'x'; }
+        // 작은 코드 대비: 줌 여유가 있으면 처음부터 5배로 시작 (기기 최대치까지)
+        if(mx>=1.8){ const iz=Math.min(5,mx); try{ await track.applyConstraints({advanced:[{zoom:iz}]}); }catch(_){} zi.value=iz; zv.textContent=Number(iz).toFixed(1)+'x'; }
       }
       if(caps.torch){
         const tb=document.createElement('button'); tb.className='btn btn-ghost btn-sm'; tb.type='button'; tb.textContent='💡 조명 켜기';
