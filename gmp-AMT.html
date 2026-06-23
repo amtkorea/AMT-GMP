@@ -643,7 +643,7 @@ async function openScanner(onResult){
     '<div style="position:absolute;inset:20% 26%;border:2px solid #38e07b;border-radius:8px;pointer-events:none"></div>'+
     '</div>'+
     '<div id="scanCtl" style="margin-top:10px;display:flex;flex-direction:column;gap:8px"></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-top:8px">작은 코드는 <b>🔍 줌</b>으로 확대, 어두우면 <b>💡 조명</b>을 켜세요. 박스를 초록 테두리 안에 가까이 비추면 자동 인식됩니다.</div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-top:8px">작은 코드는 폰을 <b>10~15cm</b>까지 가까이 대고, 흐리면 잠깐 멈춰 <b>초점</b>을 맞추세요. 더 작으면 <b>🔍 줌</b>으로 확대, 어두우면 <b>💡 조명</b>을 켜고 초록 박스 중앙에 비추면 자동 인식됩니다.</div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="scanCancel">취소</button></div></div>';
   document.body.appendChild(m);
   const vid=m.querySelector('#scanVid'), ctl=m.querySelector('#scanCtl');
@@ -651,7 +651,7 @@ async function openScanner(onResult){
   function stop(){ stopped=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); m.remove(); }
   m.querySelector('#scanCancel').addEventListener('click', stop);
   try{
-    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} } });
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30} } });
     vid.srcObject=stream; await vid.play();
     track=stream.getVideoTracks()[0];
     try{
@@ -664,6 +664,8 @@ async function openScanner(onResult){
         ctl.appendChild(z);
         const zi=z.querySelector('#scanZoom'), zv=z.querySelector('#scanZoomV');
         zi.addEventListener('input', async()=>{ try{ await track.applyConstraints({advanced:[{zoom:Number(zi.value)}]}); zv.textContent=Number(zi.value).toFixed(1)+'x'; }catch(_){} });
+        // 작은 코드 대비: 줌 여유가 있으면 처음부터 2배로 시작
+        if(mx>=1.8){ const iz=Math.min(2,mx); try{ await track.applyConstraints({advanced:[{zoom:iz}]}); }catch(_){} zi.value=iz; zv.textContent=Number(iz).toFixed(1)+'x'; }
       }
       if(caps.torch){
         const tb=document.createElement('button'); tb.className='btn btn-ghost btn-sm'; tb.type='button'; tb.textContent='💡 조명 켜기';
@@ -672,11 +674,27 @@ async function openScanner(onResult){
       }
     }catch(_){}
   }catch(e){ toast('카메라 접근 실패: '+(e.message||e)); stop(); return; }
+  const cv=document.createElement('canvas');
+  const cx=cv.getContext('2d',{willReadFrequently:true});
+  async function detectIn(src){ try{ const c=await detector.detect(src); return (c&&c.length)?c:null; }catch(_){ return null; } }
   async function tick(){
     if(stopped) return;
     try{
-      const codes = await detector.detect(vid);
-      if(codes && codes.length){ const raw=codes[0].rawValue; stop(); onResult(parseGs1(raw)); return; }
+      const vw=vid.videoWidth, vh=vid.videoHeight;
+      let codes=null;
+      if(vw && vh){
+        // 1) 화면 중앙 60% 만 잘라서 인식 (작은 코드가 차지하는 비율이 커져 인식률↑)
+        const rw=Math.round(vw*0.6), rh=Math.round(vh*0.6);
+        const sx=Math.round((vw-rw)/2), sy=Math.round((vh-rh)/2);
+        cv.width=rw; cv.height=rh;
+        cx.drawImage(vid, sx, sy, rw, rh, 0, 0, rw, rh);
+        codes = await detectIn(cv);
+        // 2) 중앙에서 못 찾으면 전체 프레임으로도 한 번 더
+        if(!codes) codes = await detectIn(vid);
+      } else {
+        codes = await detectIn(vid);
+      }
+      if(codes){ const raw=codes[0].rawValue; stop(); onResult(parseGs1(raw)); return; }
     }catch(_){}
     raf=requestAnimationFrame(tick);
   }
