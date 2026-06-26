@@ -124,6 +124,8 @@
   }
   .menu-toggle{display:none;background:none;border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin-right:10px}
 </style>
+<!-- PC(윈도우)에서 이미지/스크린샷의 GS1 DataMatrix 인식용 (신뢰 CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 </head>
 <body>
 
@@ -626,30 +628,92 @@ function parseGs1(raw){
   };
 }
 
+/* ── PC: 이미지/스크린샷에서 GS1 DataMatrix 인식 (ZXing) ── */
+async function decodeImageGs1(fileOrBlob){
+  if(!(window.ZXing && ZXing.BrowserMultiFormatReader)) throw new Error('인식기 로딩 안됨 (인터넷 연결을 확인하세요)');
+  const url=URL.createObjectURL(fileOrBlob);
+  try{
+    const img=new Image();
+    await new Promise((res,rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error('이미지를 열 수 없습니다')); img.src=url; });
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.DATA_MATRIX]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    const reader=new ZXing.BrowserMultiFormatReader(hints);
+    let text=null;
+    try{ const r=await reader.decodeFromImageElement(img); text=r&&r.getText(); }catch(_){}
+    if(!text){ // 작은 코드 대비: 확대해서 재시도
+      try{
+        const nw=img.naturalWidth||img.width, nh=img.naturalHeight||img.height;
+        const scale=Math.min(3, Math.max(1.5, 1600/Math.max(nw,1)));
+        const cv=document.createElement('canvas'); cv.width=Math.round(nw*scale); cv.height=Math.round(nh*scale);
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+        const r2=await reader.decodeFromImageUrl(cv.toDataURL('image/png')); text=r2&&r2.getText();
+      }catch(_){}
+    }
+    try{ reader.reset(); }catch(_){}
+    if(!text) throw new Error('GS1 매트릭스를 찾지 못했습니다');
+    return parseGs1(text);
+  } finally { URL.revokeObjectURL(url); }
+}
+
 /* ── 카메라 스캔 (BarcodeDetector + 줌·조명·고해상도) ── */
 async function openScanner(onResult){
-  let detector;
-  try{
-    if(!('BarcodeDetector' in window)) throw new Error('이 브라우저는 자동 스캔 미지원 (아이폰 사파리 등)');
-    const fmts = await window.BarcodeDetector.getSupportedFormats();
-    if(!fmts.includes('data_matrix')) throw new Error('이 기기는 DataMatrix 스캔 미지원');
-    detector = new window.BarcodeDetector({formats:['data_matrix']});
-  }catch(e){ toast('자동 스캔 불가 — 수동 입력하세요 ('+e.message+')'); return; }
+  // 카메라 자동스캔 가능 여부 (안드로이드 크롬 등). 없으면 이미지 인식만 제공
+  let detector=null;
+  if('BarcodeDetector' in window){
+    try{
+      const fmts = await window.BarcodeDetector.getSupportedFormats();
+      if(fmts.includes('data_matrix')) detector = new window.BarcodeDetector({formats:['data_matrix']});
+    }catch(_){ detector=null; }
+  }
 
-  const m=document.createElement('div'); m.className='modal-bg';
-  m.innerHTML='<div class="modal" style="max-width:440px"><h3>GS1 매트릭스 스캔</h3>'+
+  const camHtml = detector ?
     '<div style="position:relative">'+
     '<video id="scanVid" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000;aspect-ratio:3/4;object-fit:cover"></video>'+
     '<div style="position:absolute;inset:20% 26%;border:2px solid #38e07b;border-radius:8px;pointer-events:none"></div>'+
     '</div>'+
     '<div id="scanCtl" style="margin-top:10px;display:flex;flex-direction:column;gap:8px"></div>'+
-    '<div style="color:var(--muted);font-size:12px;margin-top:8px">작은 코드는 폰을 <b>10~15cm</b>까지 가까이 대고, 흐리면 잠깐 멈춰 <b>초점</b>을 맞추세요. 더 작으면 <b>🔍 줌</b>으로 확대, 어두우면 <b>💡 조명</b>을 켜고 초록 박스 중앙에 비추면 자동 인식됩니다.</div>'+
+    '<div style="color:var(--muted);font-size:12px;margin-top:8px">작은 코드는 폰을 <b>10~15cm</b>까지 가까이 대고 흐리면 잠깐 멈춰 <b>초점</b>을 맞추세요. <b>🔍 줌</b>·<b>💡 조명</b> 활용.</div>'+
+    '<div style="text-align:center;color:var(--muted);font-size:12px;margin:12px 0 6px">— 또는 이미지로 인식 —</div>' : '';
+
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal" style="max-width:460px"><h3>GS1 매트릭스 인식</h3>'+
+    camHtml +
+    '<div id="scanDrop" style="border:2px dashed #38e07b;border-radius:10px;padding:18px;text-align:center;cursor:pointer;background:#f0fdf4">'+
+      '<div style="font-size:13px;color:#166534;line-height:1.8"><b>📂 이미지 파일 선택</b><br>화면 캡처 후 <b>Ctrl+V</b> 붙여넣기 · 파일을 여기로 <b>드래그</b></div>'+
+      '<div style="font-size:12px;color:var(--muted);margin-top:6px">GS1 DataMatrix가 또렷하게 보이는 사진/캡처를 올리세요</div>'+
+    '</div>'+
+    '<input type="file" id="scanFile" accept="image/*" style="display:none">'+
+    '<div id="scanMsg" style="font-size:12px;margin-top:8px;min-height:16px;text-align:center"></div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="scanCancel">취소</button></div></div>';
   document.body.appendChild(m);
-  const vid=m.querySelector('#scanVid'), ctl=m.querySelector('#scanCtl');
+
   let stream=null, raf=0, stopped=false, track=null, torchOn=false;
-  function stop(){ stopped=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); m.remove(); }
+  function stop(){ stopped=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); document.removeEventListener('paste', onPaste); m.remove(); }
   m.querySelector('#scanCancel').addEventListener('click', stop);
+  m.addEventListener('click', e=>{ if(e.target===m) stop(); });
+
+  // ── 이미지 인식 (파일/붙여넣기/드래그, 모든 환경) ──
+  const msg=m.querySelector('#scanMsg'), drop=m.querySelector('#scanDrop'), fileInp=m.querySelector('#scanFile');
+  let busy=false;
+  async function handleImageFile(file){
+    if(busy) return;
+    if(!file || !/^image\//.test(file.type||'')){ msg.innerHTML='<span style="color:#dc2626">이미지 파일이 아닙니다</span>'; return; }
+    busy=true; msg.innerHTML='<span style="color:var(--muted)">인식 중...</span>';
+    try{ const g=await decodeImageGs1(file); msg.innerHTML='<span style="color:#16a34a">✅ 인식 완료</span>'; stop(); onResult(g); }
+    catch(e){ busy=false; msg.innerHTML='<span style="color:#dc2626">'+escHtml(e.message||'인식 실패')+'<br>코드가 또렷하게 나오게 더 크게/가까이 캡처해 주세요</span>'; }
+  }
+  drop.addEventListener('click', ()=>fileInp.click());
+  fileInp.addEventListener('change', ()=>{ if(fileInp.files&&fileInp.files[0]) handleImageFile(fileInp.files[0]); });
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); e.stopPropagation(); drop.style.background='#dcfce7'; }));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); e.stopPropagation(); drop.style.background='#f0fdf4'; }));
+  drop.addEventListener('drop', e=>{ const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f) handleImageFile(f); });
+  function onPaste(e){ const items=(e.clipboardData&&e.clipboardData.items)||[]; for(const it of items){ if(it.type&&it.type.indexOf('image')===0){ const f=it.getAsFile(); if(f){ handleImageFile(f); e.preventDefault(); return; } } } }
+  document.addEventListener('paste', onPaste);
+
+  // ── 카메라 (지원 기기에서만) ──
+  if(!detector) return;
+  const vid=m.querySelector('#scanVid'), ctl=m.querySelector('#scanCtl');
   try{
     stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30} } });
     vid.srcObject=stream; await vid.play();
@@ -664,7 +728,6 @@ async function openScanner(onResult){
         ctl.appendChild(z);
         const zi=z.querySelector('#scanZoom'), zv=z.querySelector('#scanZoomV');
         zi.addEventListener('input', async()=>{ try{ await track.applyConstraints({advanced:[{zoom:Number(zi.value)}]}); zv.textContent=Number(zi.value).toFixed(1)+'x'; }catch(_){} });
-        // 작은 코드 대비: 줌 여유가 있으면 처음부터 5배로 시작 (기기 최대치까지)
         if(mx>=1.8){ const iz=Math.min(5,mx); try{ await track.applyConstraints({advanced:[{zoom:iz}]}); }catch(_){} zi.value=iz; zv.textContent=Number(iz).toFixed(1)+'x'; }
       }
       if(caps.torch){
@@ -673,7 +736,7 @@ async function openScanner(onResult){
         ctl.appendChild(tb);
       }
     }catch(_){}
-  }catch(e){ toast('카메라 접근 실패: '+(e.message||e)); stop(); return; }
+  }catch(e){ msg.innerHTML='<span style="color:var(--muted)">카메라 사용 불가 — 위 이미지 인식을 이용하세요</span>'; return; }
   const cv=document.createElement('canvas');
   const cx=cv.getContext('2d',{willReadFrequently:true});
   async function detectIn(src){ try{ const c=await detector.detect(src); return (c&&c.length)?c:null; }catch(_){ return null; } }
@@ -683,13 +746,11 @@ async function openScanner(onResult){
       const vw=vid.videoWidth, vh=vid.videoHeight;
       let codes=null;
       if(vw && vh){
-        // 1) 화면 중앙 60% 만 잘라서 인식 (작은 코드가 차지하는 비율이 커져 인식률↑)
         const rw=Math.round(vw*0.6), rh=Math.round(vh*0.6);
         const sx=Math.round((vw-rw)/2), sy=Math.round((vh-rh)/2);
         cv.width=rw; cv.height=rh;
         cx.drawImage(vid, sx, sy, rw, rh, 0, 0, rw, rh);
         codes = await detectIn(cv);
-        // 2) 중앙에서 못 찾으면 전체 프레임으로도 한 번 더
         if(!codes) codes = await detectIn(vid);
       } else {
         codes = await detectIn(vid);
@@ -706,7 +767,7 @@ function openLotModal(p){
   const shelf = prod.shelfMonths || 36;
   const m=document.createElement('div'); m.className='modal-bg';
   m.innerHTML='<div class="modal"><h3>LOT 등록 — '+escHtml(p.gmpProduct)+'</h3>'+
-    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 스캔</button>'+
+    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 인식 (카메라·이미지)</button>'+
     '<div style="color:var(--muted);font-size:11px;margin-top:6px;text-align:center">스캔하면 LOT·제조일·유통기한이 자동 입력됩니다 (폰에서)</div></div>'+
     '<div class="field"><label>제품 (운영앱 '+escHtml(p.opProduct)+' / 수입 '+escHtml(p.date)+')</label><input class="ro" value="'+escHtml(p.gmpProduct)+'" disabled></div>'+
     '<div class="field"><label>LOT 번호</label><input id="l_lot" placeholder="예: 25040728"></div>'+
@@ -782,7 +843,7 @@ async function openManualLotModal(){
   let opts=''; prods.forEach(p=>{ opts+='<option value="'+escHtml(p._id)+'">'+escHtml(p.name)+(p.model?(' ('+escHtml(p.model)+')'):'')+'</option>'; });
   const m=document.createElement('div'); m.className='modal-bg';
   m.innerHTML='<div class="modal"><h3>직접 LOT 등록 <span style="font-size:12px;color:var(--muted);font-weight:400">(작년 이월분 등)</span></h3>'+
-    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 스캔</button>'+
+    '<div style="margin-bottom:12px"><button class="btn btn-blue btn-full" id="l_scan">📷 GS1 매트릭스 인식 (카메라·이미지)</button>'+
     '<div style="color:var(--muted);font-size:11px;margin-top:6px;text-align:center">스캔하면 LOT·제조일·유통기한이 자동 입력됩니다 (폰에서)</div></div>'+
     '<div class="field"><label>제품</label><select id="l_prod">'+opts+'</select></div>'+
     '<div class="field"><label>LOT 번호</label><input id="l_lot" placeholder="예: 25040728"></div>'+
