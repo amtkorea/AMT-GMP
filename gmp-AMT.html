@@ -426,9 +426,11 @@ function openProdModal(row){
 }
 async function delProduct(row){
   if(!row) return;
-  if(!confirm('“'+row.name+'” 제품을 삭제할까요?')) return;
-  try{ await set(ref(db,'gmp_data/products/'+row._id), null); logAudit('삭제','제품 삭제: '+row.name); toast('삭제되었습니다'); }
-  catch(e){ toast('삭제 실패: '+e.message); }
+  requireApproval('제품 삭제', row.name, async (reason)=>{
+    await set(ref(db,'gmp_data/products/'+row._id), null);
+    logAudit('삭제','제품 삭제: '+row.name+' · 사유: '+reason);
+    toast('삭제되었습니다');
+  });
 }
 const SEED_PRODUCTS=[
   {name:'JUC Spray Dressing', model:'JUC10', gtins:['06922278500034','10692227850034'], maker:'NMS Technologies Co.,Ltd.', importer:'AMT Korea', sterile:false, shelfMonths:36},
@@ -569,6 +571,7 @@ function openLotEditModal(l){
     '<div class="field"><label>입고일</label><input id="le_in" type="date" value="'+escHtml(l.inDate||'')+'"></div>'+
     '<div class="field"><label>표준등록(통관) 발급번호</label><input id="le_customs" value="'+escHtml(l.customsNo||'')+'" placeholder="예: 2-305-01-25-0021896-5"></div>'+
     '<div class="field"><label>수입신고(면장) 번호</label><input id="le_decl" value="'+escHtml(l.importDeclNo||'')+'" placeholder="예: 11194-25-800666M"></div>'+
+    '<div class="field"><label>수정 사유 (필수)</label><input id="le_reason" placeholder="예: 유통기한 오기 정정"></div>'+
     '</div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" id="le_cancel">취소</button><button class="btn" id="le_save">저장</button></div></div>';
   document.body.appendChild(m);
@@ -583,13 +586,98 @@ function openLotEditModal(l){
       customsNo:(m.querySelector('#le_customs').value||'').trim(),
       importDeclNo:(m.querySelector('#le_decl').value||'').trim()
     };
+    const reason=(m.querySelector('#le_reason').value||'').trim();
     if(!upd.lotNo){ toast('LOT 번호를 입력하세요'); return; }
-    try{
+    if(reason.length<2){ toast('수정 사유를 입력하세요'); return; }
+    requireOtp('LOT 수정', l.product+' / LOT '+upd.lotNo, reason, async ()=>{
       await update(ref(db,'gmp_data/lots/'+l._id), upd);
-      logAudit('수정','LOT 수정: '+l.product+' / '+upd.lotNo);
+      logAudit('수정','LOT 수정: '+l.product+' / '+upd.lotNo+' · 사유: '+reason);
       toast('저장되었습니다'); m.remove();
-    }catch(e){ toast('저장 실패: '+e.message); }
+    });
   });
+}
+
+/* ════════ OTP 승인 + 사유 (AMT 방식: 인앱 + 텔레그램, 총괄 면제) ════════ */
+let GMP_TG_TOKEN='', GMP_TG_CHAT='', _otpWatch=null;
+async function loadTelegramCfg(){
+  try{ const c=(await get(ref(db,'config/telegram'))).val()||{}; GMP_TG_TOKEN=c.superAdminToken||''; GMP_TG_CHAT=c.superAdminChatId||''; }catch(_){}
+}
+function _esc4tg(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function sendTelegramGmp(text){
+  if(!GMP_TG_TOKEN||!GMP_TG_CHAT) return;
+  try{ await fetch('https://api.telegram.org/bot'+GMP_TG_TOKEN+'/sendMessage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:GMP_TG_CHAT,text:text,parse_mode:'HTML'})}); }catch(_){}
+}
+// 사유 입력 모달 (필수). 반환: 사유 문자열 또는 null(취소)
+function _askReason(action, detail){
+  return new Promise(resolve=>{
+    const m=document.createElement('div'); m.className='modal-bg';
+    m.innerHTML='<div class="modal" style="max-width:420px"><h3>'+escHtml(action)+' — 사유 입력 (필수)</h3>'+
+      '<div style="font-size:13px;color:var(--muted);margin-bottom:8px">대상: '+escHtml(detail)+'</div>'+
+      '<div class="field"><label>사유</label><textarea id="_rsn" rows="3" placeholder="예: 입력 실수 정정 / 고객 반품 / 폐기 등"></textarea></div>'+
+      '<div id="_rsnMsg" style="font-size:12px;color:#dc2626;min-height:16px"></div>'+
+      '<div class="modal-foot"><button class="btn btn-ghost" id="_rsnC">취소</button><button class="btn" id="_rsnOk">다음</button></div></div>';
+    document.body.appendChild(m);
+    const done=(v)=>{ m.remove(); resolve(v); };
+    m.querySelector('#_rsnC').addEventListener('click',()=>done(null));
+    m.addEventListener('click',e=>{ if(e.target===m) done(null); });
+    m.querySelector('#_rsnOk').addEventListener('click',()=>{ const v=(m.querySelector('#_rsn').value||'').trim(); if(v.length<2){ m.querySelector('#_rsnMsg').textContent='사유를 입력하세요'; return; } done(v); });
+  });
+}
+// OTP 게이트 (총괄은 면제). reason은 확보된 상태로 전달. 통과 시 callback() 실행
+function requireOtp(action, detail, reason, callback){
+  if(currentUser && currentUser.role==='super'){ Promise.resolve().then(callback).catch(e=>toast('오류: '+(e&&e.message||e))); return; }
+  const otp6=String(Math.floor(100000+Math.random()*900000));
+  const reqId='otp_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  const req={ otp:otp6, action:String(action||''), detail:String(detail||''), reason:String(reason||''), by:(currentUser&&currentUser.name)||'?', byEmail:(currentUser&&currentUser.email)||'', ts:Date.now(), expires:Date.now()+10*60*1000, used:false };
+  set(ref(db,'gmp_otp/'+reqId), req).catch(()=>{});  // 인앱 표시용
+  const now=new Date().toLocaleString('ko-KR');
+  sendTelegramGmp(['🔐 <b>GMP 승인요청</b>','','📋 작업: <b>'+_esc4tg(action)+'</b>','🎯 대상: '+_esc4tg(detail),'👤 요청자: '+_esc4tg(req.by),'📝 사유: '+_esc4tg(reason),'🔑 코드: <b>'+otp6+'</b>','⏰ 유효 10분','🕐 '+now,'','이 코드를 요청자에게 알려주세요.'].join('\n'));
+  const m=document.createElement('div'); m.className='modal-bg';
+  m.innerHTML='<div class="modal" style="max-width:380px"><h3>🔐 총괄관리자 승인 (OTP)</h3>'+
+    '<div style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:10px"><b>'+escHtml(action)+'</b><br>대상: '+escHtml(detail)+'<br>사유: '+escHtml(reason)+'</div>'+
+    '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:12px;color:#1e40af;margin-bottom:12px">총괄관리자 앱과 텔레그램으로 6자리 코드가 전달되었습니다. (유효 10분)</div>'+
+    '<div class="field"><label>OTP 코드 (6자리)</label><input id="_otpIn" inputmode="numeric" maxlength="6" placeholder="000000" style="text-align:center;letter-spacing:8px;font-size:20px;font-weight:700"></div>'+
+    '<div id="_otpMsg" style="font-size:12px;color:#dc2626;min-height:16px"></div>'+
+    '<div class="modal-foot"><button class="btn btn-ghost" id="_otpC">취소</button><button class="btn" id="_otpOk">✓ 승인 확인</button></div></div>';
+  document.body.appendChild(m);
+  const inp=m.querySelector('#_otpIn'); setTimeout(()=>inp.focus(),80);
+  m.querySelector('#_otpC').addEventListener('click',()=>{ set(ref(db,'gmp_otp/'+reqId),null).catch(()=>{}); m.remove(); });
+  async function verify(){
+    const code=(inp.value||'').trim(); const msg=m.querySelector('#_otpMsg');
+    if(!/^\d{6}$/.test(code)){ msg.textContent='6자리 숫자를 입력하세요'; return; }
+    let rec=null; try{ rec=(await get(ref(db,'gmp_otp/'+reqId))).val(); }catch(_){}
+    if(!rec){ msg.textContent='요청을 찾을 수 없습니다. 다시 시도하세요.'; return; }
+    if(Date.now()>rec.expires){ msg.textContent='코드가 만료되었습니다(10분). 취소 후 다시 요청하세요.'; return; }
+    if(String(rec.otp)!==code){ msg.textContent='코드가 틀립니다.'; return; }
+    await set(ref(db,'gmp_otp/'+reqId), null);  // 1회용 소비
+    logAudit('OTP승인', action+' · 대상: '+detail+' · 사유: '+reason+' · 요청자 '+req.by);
+    m.remove();
+    try{ await callback(); }catch(e){ toast('오류: '+(e&&e.message||e)); }
+  }
+  m.querySelector('#_otpOk').addEventListener('click',verify);
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') verify(); });
+}
+// 사유 입력 → OTP 게이트 → run(reason) 실행 (사유 필드가 따로 없는 액션용)
+async function requireApproval(action, detail, run){
+  const reason=await _askReason(action, detail);
+  if(reason===null) return;
+  requireOtp(action, detail, reason, ()=>run(reason));
+}
+// 총괄 화면: 대기 중 OTP를 하단 배너로 표시 (인앱 수신)
+function watchOtpSuper(){
+  if(_otpWatch){ try{ _otpWatch(); }catch(_){} _otpWatch=null; }
+  const b0=document.getElementById('otpBanner'); if(b0) b0.remove();
+  if(!(currentUser && currentUser.role==='super')) return;
+  const r=ref(db,'gmp_otp');
+  const cb=onValue(r,(snap)=>{
+    const v=snap.val()||{}; const now=Date.now();
+    const list=Object.keys(v).map(k=>v[k]).filter(x=>x&&!x.used&&x.expires>now).sort((a,b)=>b.ts-a.ts);
+    let b=document.getElementById('otpBanner');
+    if(!list.length){ if(b) b.remove(); return; }
+    if(!b){ b=document.createElement('div'); b.id='otpBanner'; b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9000;background:#1e293b;color:#fff;padding:10px 14px;font-size:13px;box-shadow:0 -4px 16px rgba(0,0,0,.25)'; document.body.appendChild(b); }
+    b.innerHTML='🔐 <b>승인요청 '+list.length+'건</b> '+list.slice(0,4).map(x=>'<span style="display:inline-block;background:#334155;border-radius:6px;padding:3px 8px;margin:2px 4px">'+escHtml(x.by)+' · '+escHtml(x.action)+' → 코드 <b style="color:#38e07b">'+escHtml(x.otp)+'</b></span>').join('');
+  },()=>{});
+  _otpWatch=()=>off(r,'value',cb);
 }
 
 /* ── GS1 DataMatrix 파서 (괄호형식 + FNC1 raw 둘 다 지원) ── */
@@ -1223,17 +1311,14 @@ function drawOutboundList(){
 async function voidOutbound(o){
   if(!o || o.voided) return;
   if(outReturned(o)>0){ toast('반품 이력이 있는 출고는 취소할 수 없습니다. 반품으로 처리하세요.'); return; }
-  if(!confirm('이 출고를 취소(무효)할까요?\n'+o.product+' / LOT '+o.lotNo+' / '+fmt(o.qty)+'개\n\n→ 재고가 원복되고, 출고/검사성적서는 "취소됨"으로 표시됩니다.')) return;
-  const reason=prompt('취소 사유를 입력하세요 (예: 입력 실수 / 출고 취소):','');
-  if(reason===null) return;
-  try{
+  requireApproval('출고 취소(무효)', o.product+' / LOT '+o.lotNo+' / '+fmt(o.qty)+'개', async (reason)=>{
     const lotSnap=(await get(ref(db,'gmp_data/lots/'+o.lotId))).val();
     if(lotSnap){ await update(ref(db,'gmp_data/lots/'+o.lotId), { currentQty:(Number(lotSnap.currentQty)||0)+(Number(o.qty)||0) }); }
-    await update(ref(db,'gmp_data/outbound/'+o._id), { voided:true, voidReason:(reason||'취소'), voidDate:new Date().toISOString().slice(0,10), voidBy:currentUser.name });
+    await update(ref(db,'gmp_data/outbound/'+o._id), { voided:true, voidReason:reason, voidDate:new Date().toISOString().slice(0,10), voidBy:currentUser.name });
     if(o.inspectOutId){ await update(ref(db,'gmp_data/inspectOut/'+o.inspectOutId), { voided:true }); }
-    logAudit('출고취소','출고 취소: '+o.product+'/'+o.lotNo+' '+fmt(o.qty)+'개 ('+(reason||'취소')+') · 재고 원복');
+    logAudit('출고취소','출고 취소: '+o.product+'/'+o.lotNo+' '+fmt(o.qty)+'개 · 사유: '+reason+' · 재고 원복');
     toast('출고를 취소했습니다 (재고 원복)');
-  }catch(e){ toast('취소 실패: '+e.message); }
+  });
 }
 
 function returnOutbound(o){
@@ -1259,16 +1344,16 @@ function returnOutbound(o){
     const reason=(m.querySelector('#rt_reason').value||'').trim();
     const qm=(m.querySelector('#rt_qm').value||'강승섭').trim();
     if(qty<=0){ toast('반품 수량을 입력하세요'); return; }
+    if(reason.length<2){ toast('반품 사유를 입력하세요'); return; }
     const nowRemaining=qtyAll-outReturned(o);
     if(qty>nowRemaining){ toast('반품 가능 수량('+fmt(nowRemaining)+')보다 많을 수 없습니다'); return; }
-    const btn=m.querySelector('#rt_save'); btn.disabled=true;
-    try{
+    requireOtp('출고 반품', o.product+' / LOT '+o.lotNo+' / '+fmt(qty)+'개', reason, async ()=>{
       const lotSnap=(await get(ref(db,'gmp_data/lots/'+o.lotId))).val();
       if(lotSnap){ await update(ref(db,'gmp_data/lots/'+o.lotId), { currentQty:(Number(lotSnap.currentQty)||0)+qty }); }
       await push(ref(db,'gmp_data/returns'), { outboundId:o._id, lotId:o.lotId, product:o.product, model:o.model||'', lotNo:o.lotNo, qty, returnDate:date, reason, inspector:qm, createdAt:Date.now(), by:currentUser.name });
-      logAudit('반품','반품 처리: '+o.product+'/'+o.lotNo+' '+fmt(qty)+'개 ('+(reason||'')+') · 재고 복원');
+      logAudit('반품','반품 처리: '+o.product+'/'+o.lotNo+' '+fmt(qty)+'개 · 사유: '+reason+' · 재고 복원');
       toast('반품 처리 완료 (재고 복원)'); m.remove();
-    }catch(e){ btn.disabled=false; toast('반품 실패: '+e.message); }
+    });
   });
 }
 
@@ -1877,13 +1962,12 @@ async function doUpload(cfg, lot){
 }
 async function delAttachment(cfg, lot, att){
   if(!att) return;
-  if(!confirm('이 첨부를 삭제할까요? (Drive 휴지통으로 이동)\n'+att.name)) return;
-  try{
+  requireApproval('첨부파일 삭제', lot.product+'/'+lot.lotNo+' · '+att.name, async (reason)=>{
     if(att.fileId){ try{ await gasUpload(cfg,{ action:'delete', fileId:att.fileId }); }catch(_){} }
     await set(ref(db,'gmp_data/attachments/'+lot._id+'/'+att._id), null);
-    logAudit('첨부삭제','파일 삭제: '+lot.product+'/'+lot.lotNo+' · '+att.name);
+    logAudit('첨부삭제','파일 삭제: '+lot.product+'/'+lot.lotNo+' · '+att.name+' · 사유: '+reason);
     toast('삭제되었습니다');
-  }catch(e){ toast('삭제 실패: '+e.message); }
+  });
 }
 
 /* ════════ 부적합품 관리 (AMT-OP-501) ════════ */
@@ -2204,10 +2288,10 @@ onAuthStateChanged(auth, async (user)=>{
   if(user && !currentUser){
     try{
       const rec=(await get(ref(db,'gmp_admins/'+emailKey(user.email)))).val();
-      if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); dailyAutoBackup(); }
+      if(rec){ currentUser={email:user.email.toLowerCase(), name:rec.name, role:rec.role||'viewer'}; renderMain(); dailyAutoBackup(); loadTelegramCfg(); watchOtpSuper(); }
       else { await signOut(auth); showLogin(); }
     }catch(e){ showLogin(); }
-  }else if(!user){ currentUser=null; showLogin(); }
+  }else if(!user){ currentUser=null; watchOtpSuper(); showLogin(); }
 });
 </script>
 </body>
